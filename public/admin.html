@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ProImplant — Admin Panel</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Allura&family=Oswald:wght@400;500;600;700&family=Poppins:wght@300;400;500;600&display=swap" rel="stylesheet" media="print" onload="this.media='all'" />
+  <noscript><link href="https://fonts.googleapis.com/css2?family=Allura&family=Oswald:wght@400;500;600;700&family=Poppins:wght@300;400;500;600&display=swap" rel="stylesheet" /></noscript>
+  <link rel="stylesheet" href="/css/admin.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦷</text></svg>" />
+</head>
+<body>
+  <!-- Login -->
+  <div class="login-wrap" id="loginWrap">
+    <form class="login-card" id="loginForm">
+      <div class="brand-logo">
+        <span class="pro">Pro</span>
+        <svg class="tooth" viewBox="0 0 40 54" xmlns="http://www.w3.org/2000/svg" fill="none">
+          <path d="M20 4C11.7 4 5 8.4 5 17.5c0 6.8 2.2 11.8 4.2 18.6C10.8 41.6 11 50 13.4 50c2.6 0 2.2-8.6 4.6-8.6h4c2.4 0 2 8.6 4.6 8.6 2.4 0 2.6-8.4 4.2-13.9C36.8 29.3 39 24.3 39 17.5 39 8.4 28.3 4 20 4Z" stroke="#2e2e30" stroke-width="2.4" fill="#fff"/>
+          <path d="M14 22h12M15 27h10M16 32h8M17 37h6" stroke="#2e2e30" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <span class="implant">Implant</span>
+      </div>
+      <div class="sub">Admin Panel · Sign in</div>
+      <div class="err" id="loginErr"></div>
+      <div class="field">
+        <label>Email</label>
+        <input type="email" id="loginEmail" required autocomplete="username" />
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" id="loginPassword" required autocomplete="current-password" />
+      </div>
+      <button class="btn btn-primary" style="width:100%;margin-top:6px" id="loginBtn">Sign in</button>
+    </form>
+  </div>
+
+  <!-- App -->
+  <div class="app" id="app">
+    <aside class="sidebar">
+      <div class="brand brand-logo">
+        <span class="pro">Pro</span>
+        <svg class="tooth" viewBox="0 0 40 54" xmlns="http://www.w3.org/2000/svg" fill="none">
+          <path d="M20 4C11.7 4 5 8.4 5 17.5c0 6.8 2.2 11.8 4.2 18.6C10.8 41.6 11 50 13.4 50c2.6 0 2.2-8.6 4.6-8.6h4c2.4 0 2 8.6 4.6 8.6 2.4 0 2.6-8.4 4.2-13.9C36.8 29.3 39 24.3 39 17.5 39 8.4 28.3 4 20 4Z" stroke="#e9a521" stroke-width="2.4" fill="none"/>
+          <path d="M14 22h12M15 27h10M16 32h8M17 37h6" stroke="#e9a521" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <span class="implant">Implant</span>
+      </div>
+      <nav>
+        <a data-view="dashboard" class="active">📊 Dashboard</a>
+        <a data-view="appointments">📅 Appointments</a>
+        <a data-view="doctors">👨‍⚕️ Doctors</a>
+        <a data-view="services">🦷 Services</a>
+        <a data-view="settings">⚙️ Clinic settings</a>
+        <a data-view="admins">🔑 Admins</a>
+        <a href="/" target="_blank">🌐 View website</a>
+      </nav>
+      <div class="logout"><button id="logoutBtn">Log out</button></div>
+    </aside>
+
+    <main class="main">
+      <div class="topbar">
+        <h1 id="viewTitle">Dashboard</h1>
+        <div class="who">Signed in as <b id="whoName"></b></div>
+      </div>
+
+      <!-- Dashboard -->
+      <section class="view active" id="view-dashboard">
+        <div class="stats" id="statsGrid"></div>
+        <div class="panel">
+          <div class="panel-head"><h2>Upcoming & recent requests</h2></div>
+          <div id="recentApptsWrap"></div>
+        </div>
+      </section>
+
+      <!-- Appointments -->
+      <section class="view" id="view-appointments">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Appointments</h2>
+            <div class="filters">
+              <select id="filterStatus">
+                <option value="">All statuses</option>
+                <option value="pending">Pending</option>
+                <option value="confirmed">Confirmed</option>
+                <option value="completed">Completed</option>
+                <option value="cancelled">Cancelled</option>
+              </select>
+              <input type="date" id="filterDate" />
+              <button class="btn btn-ghost btn-sm" id="clearFilters">Clear</button>
+            </div>
+          </div>
+          <div id="apptsWrap"></div>
+        </div>
+      </section>
+
+      <!-- Doctors -->
+      <section class="view" id="view-doctors">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Doctors</h2>
+            <button class="btn btn-primary btn-sm" id="addDoctorBtn">+ Add doctor</button>
+          </div>
+          <div id="doctorsWrap"></div>
+        </div>
+      </section>
+
+      <!-- Services -->
+      <section class="view" id="view-services">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Services</h2>
+            <button class="btn btn-primary btn-sm" id="addServiceBtn">+ Add service</button>
+          </div>
+          <div id="servicesWrap"></div>
+        </div>
+      </section>
+
+      <!-- Settings -->
+      <section class="view" id="view-settings">
+        <div class="panel">
+          <div class="panel-head"><h2>Clinic information</h2></div>
+          <form id="settingsForm">
+            <div class="grid2">
+              <div class="field"><label>Clinic name</label><input id="setClinicName" /></div>
+              <div class="field"><label>Maps search query</label><input id="setMapsQuery" /></div>
+              <div class="field"><label>Phone</label><input id="setPhone" /></div>
+              <div class="field"><label>Phone 2</label><input id="setPhone2" /></div>
+              <div class="field"><label>Email</label><input id="setEmail" /></div>
+              <div class="field"><label>Instagram URL</label><input id="setInstagram" /></div>
+              <div class="field"><label>Address (AZ)</label><input id="setAddressAz" /></div>
+              <div class="field"><label>Address (EN)</label><input id="setAddressEn" /></div>
+              <div class="field"><label>Rating</label><input id="setRating" /></div>
+              <div class="field"><label>Review count</label><input id="setReviewCount" /></div>
+              <div class="field"><label>Slot length (minutes)</label><input id="setSlotMinutes" type="number" min="10" step="5" /></div>
+            </div>
+            <h2 style="font-size:17px;color:var(--accent);margin:18px 0 12px;">Working hours</h2>
+            <div class="hours-editor" id="hoursEditor"></div>
+            <button class="btn btn-primary" type="submit" style="margin-top:16px">Save settings</button>
+          </form>
+        </div>
+      </section>
+
+      <!-- Admins -->
+      <section class="view" id="view-admins">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Admin accounts</h2>
+            <button class="btn btn-primary btn-sm" id="addAdminBtn">+ Add admin</button>
+          </div>
+          <div id="adminsWrap"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Modal -->
+  <div class="modal-bg" id="modalBg">
+    <div class="modal" id="modal"></div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="/js/admin.js"></script>
+</body>
+</html>

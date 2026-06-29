@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="az">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ProImplant — Sumqayıt Stomatoloji Klinikası</title>
+  <meta name="description" content="ProImplant Sumqayıt Stomatoloji Klinikası — dental implantasiya, estetik stomatologiya və ağız cərrahiyyəsi. Onlayn qəbula yazılın." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Allura&family=Oswald:wght@400;500;600;700&family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'" />
+  <noscript><link href="https://fonts.googleapis.com/css2?family=Allura&family=Oswald:wght@400;500;600;700&family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet" /></noscript>
+  <link rel="stylesheet" href="/css/styles.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦷</text></svg>" />
+</head>
+<body>
+  <header>
+    <div class="container nav">
+      <a href="#home" class="logo" aria-label="ProImplant">
+        <span class="pro">Pro</span>
+        <svg class="tooth" viewBox="0 0 40 54" xmlns="http://www.w3.org/2000/svg" fill="none">
+          <path d="M20 4C11.7 4 5 8.4 5 17.5c0 6.8 2.2 11.8 4.2 18.6C10.8 41.6 11 50 13.4 50c2.6 0 2.2-8.6 4.6-8.6h4c2.4 0 2 8.6 4.6 8.6 2.4 0 2.6-8.4 4.2-13.9C36.8 29.3 39 24.3 39 17.5 39 8.4 28.3 4 20 4Z" stroke="#2e2e30" stroke-width="2.4" fill="#fff"/>
+          <path d="M14 22h12M15 27h10M16 32h8M17 37h6" stroke="#2e2e30" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <span class="implant">Implant</span>
+      </a>
+      <nav class="nav-links" id="navLinks">
+        <a href="#services" data-i18n="nav.services">Xidmətlər</a>
+        <a href="#doctors" data-i18n="nav.doctors">Həkimlər</a>
+        <a href="#why" data-i18n="nav.why">Niyə biz</a>
+        <a href="#location" data-i18n="nav.location">Ünvan</a>
+        <a href="#booking" class="btn btn-primary" data-i18n="nav.book">Qəbula yazıl</a>
+      </nav>
+      <div class="nav-actions">
+        <div class="lang-toggle">
+          <button data-lang="az" class="active">AZ</button>
+          <button data-lang="en">EN</button>
+        </div>
+        <button class="menu-toggle" id="menuToggle">☰</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Hero -->
+  <section class="hero" id="home" style="padding:0;">
+    <div class="container">
+      <div>
+        <span class="hero-badge">⭐ <span id="heroRating">4.8</span> · <span id="heroReviews">34</span> <span data-i18n="hero.reviews">rəy</span></span>
+        <span class="script-tag" data-i18n="hero.script">Təbəssümünüz bizim sənətimizdir</span>
+        <h1 data-i18n="hero.title">Sağlam və gözəl təbəssüm burada başlayır</h1>
+        <p data-i18n="hero.subtitle">Sumqayıtda müasir dental implantasiya, estetik stomatologiya və ağız cərrahiyyəsi. Təcrübəli həkimlər, müasir avadanlıq.</p>
+        <div class="hero-actions">
+          <a href="#booking" class="btn btn-primary" data-i18n="hero.cta1">Onlayn qəbula yazıl</a>
+          <a href="#services" class="btn btn-outline-light" data-i18n="hero.cta2">Xidmətlər</a>
+        </div>
+        <div class="hero-stats">
+          <div class="stat"><b>12+</b><span data-i18n="hero.stat1">il təcrübə</span></div>
+          <div class="stat"><b>5000+</b><span data-i18n="hero.stat2">məmnun xəstə</span></div>
+          <div class="stat"><b>4.8★</b><span data-i18n="hero.stat3">reytinq</span></div>
+        </div>
+      </div>
+      <div class="hero-card">
+        <h3 data-i18n="hero.cardTitle">Klinika məlumatı</h3>
+        <div class="info-row"><span class="ic">📍</span><div><b id="hcAddress">Səməd Vurğun, 1-ci mkr, 145</div></div></div>
+        <div class="info-row"><span class="ic">📞</span><div><a id="hcPhone" href="tel:0103340303">010 334 03 03</a></div></div>
+        <div class="info-row"><span class="ic">🕒</span><div><span id="hcHours">B.e–Şən: 10:00–19:00</span><small id="hcStatus"></small></div></div>
+        <div class="info-row"><span class="ic">📷</span><div><a id="hcInsta" href="#" target="_blank" rel="noopener">@pro_implant</a></div></div>
+        <a href="#booking" class="btn btn-primary btn-block" style="margin-top:14px" data-i18n="hero.cardBtn">Qəbula yazıl</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Services -->
+  <section id="services">
+    <div class="container">
+      <div class="section-head">
+        <div class="eyebrow" data-i18n="services.eyebrow">Xidmətlərimiz</div>
+        <h2 data-i18n="services.title">Tam stomatoloji xidmətlər</h2>
+        <p data-i18n="services.subtitle">İmplantologiyadan estetik stomatologiyaya qədər bütün müalicə növləri bir yerdə.</p>
+      </div>
+      <div class="services-grid" id="servicesGrid"></div>
+    </div>
+  </section>
+
+  <!-- Doctors -->
+  <section class="doctors" id="doctors">
+    <div class="container">
+      <div class="section-head">
+        <div class="eyebrow" data-i18n="doctors.eyebrow">Komandamız</div>
+        <h2 data-i18n="doctors.title">Təcrübəli həkimlərimiz</h2>
+        <p data-i18n="doctors.subtitle">Peşəkar və qayğıkeş mütəxəssislər sizə xidmət göstərir.</p>
+      </div>
+      <div class="doctors-grid" id="doctorsGrid"></div>
+    </div>
+  </section>
+
+  <!-- Why us -->
+  <section class="why" id="why">
+    <div class="container">
+      <div class="section-head">
+        <div class="eyebrow" data-i18n="why.eyebrow">Üstünlüklər</div>
+        <h2 data-i18n="why.title">Niyə ProImplant?</h2>
+      </div>
+      <div class="why-grid">
+        <div class="why-item"><span class="ic">🔬</span><div><h4 data-i18n="why.1t">Müasir avadanlıq</h4><p data-i18n="why.1p">Ən son texnologiyalar və 3D diaqnostika.</p></div></div>
+        <div class="why-item"><span class="ic">👨‍⚕️</span><div><h4 data-i18n="why.2t">Təcrübəli həkimlər</h4><p data-i18n="why.2p">Beynəlxalq təlim keçmiş mütəxəssislər.</p></div></div>
+        <div class="why-item"><span class="ic">🧼</span><div><h4 data-i18n="why.3t">Tam sterilizasiya</h4><p data-i18n="why.3p">Yüksək gigiyena və təhlükəsizlik standartları.</p></div></div>
+        <div class="why-item"><span class="ic">💳</span><div><h4 data-i18n="why.4t">Münasib qiymət</h4><p data-i18n="why.4p">Şəffaf qiymətlər və hissə-hissə ödəniş.</p></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Booking -->
+  <section class="booking" id="booking">
+    <div class="container booking-wrap">
+      <div class="booking-info">
+        <h2 data-i18n="booking.title">Onlayn qəbula yazılın</h2>
+        <p data-i18n="booking.subtitle">Formu doldurun, biz ən qısa zamanda sizinlə əlaqə saxlayaq və qəbulu təsdiqləyək.</p>
+        <div class="hours-table" id="hoursTable"></div>
+        <div class="contact-chips">
+          <a id="chipPhone" href="tel:0103340303">📞 010 334 03 03</a>
+          <a id="chipInsta" href="#" target="_blank" rel="noopener">📷 Instagram</a>
+        </div>
+      </div>
+
+      <form class="booking-form" id="bookingForm">
+        <h3 data-i18n="booking.formTitle">Qəbul üçün müraciət</h3>
+        <p class="sub" data-i18n="booking.formSub">Bütün məcburi xanaları (*) doldurun.</p>
+        <div class="form-msg" id="formMsg"></div>
+        <div class="form-row">
+          <div class="field">
+            <label data-i18n="form.name">Ad, Soyad *</label>
+            <input type="text" name="name" required maxlength="120" />
+          </div>
+          <div class="field">
+            <label data-i18n="form.phone">Telefon *</label>
+            <input type="tel" name="phone" required placeholder="+994 ..." maxlength="40" />
+          </div>
+        </div>
+        <div class="field">
+          <label data-i18n="form.email">E-mail</label>
+          <input type="email" name="email" maxlength="120" />
+        </div>
+        <div class="form-row">
+          <div class="field">
+            <label data-i18n="form.service">Xidmət</label>
+            <select name="serviceId" id="formService"></select>
+          </div>
+          <div class="field">
+            <label data-i18n="form.doctor">Həkim</label>
+            <select name="doctorId" id="formDoctor"></select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="field">
+            <label data-i18n="form.date">Tarix *</label>
+            <input type="date" name="date" id="formDate" required />
+          </div>
+          <div class="field">
+            <label data-i18n="form.time">Saat *</label>
+            <select name="time" id="formTime" required></select>
+          </div>
+        </div>
+        <div class="field">
+          <label data-i18n="form.message">Qeyd</label>
+          <textarea name="message" maxlength="1000"></textarea>
+        </div>
+        <button type="submit" class="btn btn-primary btn-block" id="submitBtn" data-i18n="form.submit">Qəbulu təsdiqlə</button>
+      </form>
+    </div>
+  </section>
+
+  <!-- Location -->
+  <section id="location">
+    <div class="container">
+      <div class="section-head">
+        <div class="eyebrow" data-i18n="location.eyebrow">Ünvan</div>
+        <h2 data-i18n="location.title">Bizi tapın</h2>
+      </div>
+      <div class="location-grid">
+        <div class="map-frame">
+          <iframe id="mapFrame" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
+        </div>
+        <div class="location-info">
+          <div class="info-row"><span class="ic">📍</span><div><b data-i18n="location.addr">Ünvan</b><span id="locAddress"></span></div></div>
+          <div class="info-row"><span class="ic">📞</span><div><b data-i18n="location.phone">Telefon</b><a id="locPhone" href="#"></a></div></div>
+          <div class="info-row"><span class="ic">✉️</span><div><b>E-mail</b><a id="locEmail" href="#"></a></div></div>
+          <div class="info-row"><span class="ic">🕒</span><div><b data-i18n="location.hours">İş saatları</b><span id="locHours"></span></div></div>
+          <a id="locDirections" class="btn btn-primary" style="margin-top:16px" target="_blank" rel="noopener" data-i18n="location.directions">Marşrutu göstər</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="container">
+      <div class="footer-grid">
+        <div>
+          <div class="logo" aria-label="ProImplant">
+            <span class="pro">Pro</span>
+            <svg class="tooth" viewBox="0 0 40 54" xmlns="http://www.w3.org/2000/svg" fill="none">
+              <path d="M20 4C11.7 4 5 8.4 5 17.5c0 6.8 2.2 11.8 4.2 18.6C10.8 41.6 11 50 13.4 50c2.6 0 2.2-8.6 4.6-8.6h4c2.4 0 2 8.6 4.6 8.6 2.4 0 2.6-8.4 4.2-13.9C36.8 29.3 39 24.3 39 17.5 39 8.4 28.3 4 20 4Z" stroke="#e9a521" stroke-width="2.4" fill="none"/>
+              <path d="M14 22h12M15 27h10M16 32h8M17 37h6" stroke="#e9a521" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+            <span class="implant">Implant</span>
+          </div>
+          <p data-i18n="footer.about">Sumqayıtda müasir stomatoloji klinika. Sağlamlığınız bizim prioritetimizdir.</p>
+        </div>
+        <div>
+          <h4 data-i18n="footer.links">Keçidlər</h4>
+          <a href="#services" data-i18n="nav.services">Xidmətlər</a>
+          <a href="#doctors" data-i18n="nav.doctors">Həkimlər</a>
+          <a href="#booking" data-i18n="nav.book">Qəbula yazıl</a>
+          <a href="/admin" data-i18n="footer.admin">Admin paneli</a>
+        </div>
+        <div>
+          <h4 data-i18n="footer.contact">Əlaqə</h4>
+          <a id="footPhone" href="#"></a>
+          <a id="footAddress" href="#"></a>
+          <a id="footInsta" href="#" target="_blank" rel="noopener">Instagram</a>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        © <span id="year"></span> ProImplant Sumqayıt Stomatoloji Klinikası.
+      </div>
+    </div>
+  </footer>
+
+  <script src="/js/main.js"></script>
+</body>
+</html>
