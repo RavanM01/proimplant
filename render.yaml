@@ -1,6 +1,19 @@
 # One-click deploy to Render.com (https://render.com)
-# 1. Push this folder to a GitHub repo.
+# 1. Push this folder to a GitHub repo (done: github.com/RavanM01/proimplant).
 # 2. On Render: New + > Blueprint > pick your repo. Render reads this file.
+# 3. When prompted, set ADMIN_PASSWORD (your admin login password).
+#
+# NOTE ON DATA PERSISTENCE:
+#   This config uses Render's FREE plan, which has an EPHEMERAL filesystem.
+#   That means the JSON database (bookings, doctors you add, settings) RESETS
+#   whenever the service restarts or redeploys, and free services also sleep
+#   after ~15 min of inactivity (first visit afterwards is slow to wake).
+#
+#   For a REAL clinic where bookings must be kept, upgrade to a paid plan and
+#   attach a persistent disk:
+#     1. change `plan: free`  ->  `plan: starter`
+#     2. uncomment the `disk:` block below
+#     3. uncomment the DATA_DIR env var (value: /var/data)
 services:
   - type: web
     name: proimplant
@@ -16,9 +29,9 @@ services:
         value: admin@proimplant.az
       - key: ADMIN_PASSWORD
         sync: false
-      - key: DATA_DIR
-        value: /var/data
-    disk:
-      name: proimplant-data
-      mountPath: /var/data
-      sizeGB: 1
+      # - key: DATA_DIR
+      #   value: /var/data
+    # disk:
+    #   name: proimplant-data
+    #   mountPath: /var/data
+    #   sizeGB: 1
