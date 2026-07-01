@@ -8,6 +8,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
+const XLSX = require('xlsx');
 
 const store = require('./db/store');
 const notify = require('./db/notify');
@@ -43,6 +44,12 @@ function rangesOverlap(s1, e1, s2, e2) {
 }
 function dayOfDate(date) {
   return new Date(date + 'T00:00:00').getDay();
+}
+// Extract a numeric fee from a free-text price label like "dən 400 AZN" -> 400.
+function parsePrice(str) {
+  if (typeof str !== 'string') return 0;
+  const m = str.replace(',', '.').match(/\d+(\.\d+)?/);
+  return m ? Number(m[0]) : 0;
 }
 
 function publicSettings() {
@@ -169,6 +176,7 @@ app.post('/api/appointments', bookingLimiter, (req, res) => {
     serviceId: service ? service.id : null,
     serviceName: service ? service.name : null,
     durationMin: duration,
+    priceHint: service ? parsePrice(service.price) : 0,
     doctorId: doctor.id,
     doctorName: doctor.name,
     date,
@@ -301,6 +309,20 @@ app.patch('/api/admin/appointments/:id', auth, (req, res) => {
   const prevStatus = appt.status;
   if (status && allowed.includes(status)) appt.status = status;
   if (typeof note === 'string') appt.adminNote = note.slice(0, 1000);
+
+  // When completing, record the payment (asked in the admin "Done" dialog).
+  if (status === 'completed' && req.body.amountTotal !== undefined) {
+    const total = Math.max(0, Number(req.body.amountTotal) || 0);
+    const pstatus = req.body.paymentStatus;
+    let paid = 0;
+    if (pstatus === 'paid') paid = total;
+    else if (pstatus === 'installment') paid = Math.max(0, Math.min(total, Number(req.body.amountPaid) || 0));
+    else paid = 0; // debt
+    appt.amountTotal = total;
+    appt.amountPaid = paid;
+    appt.paymentStatus = paid >= total && total > 0 ? 'paid' : (paid > 0 ? 'installment' : 'debt');
+    appt.paidAt = new Date().toISOString();
+  }
   store.persist();
 
   // SMS the patient when the status meaningfully changes.
@@ -322,6 +344,114 @@ app.delete('/api/admin/appointments/:id', auth, requireStaff, (req, res) => {
   db.appointments.splice(i, 1);
   store.persist();
   res.json({ ok: true });
+});
+
+// Record an additional payment (settle a debt or pay an installment).
+app.post('/api/admin/appointments/:id/payment', auth, requireStaff, (req, res) => {
+  const appt = db.appointments.find((a) => a.id === Number(req.params.id));
+  if (!appt) return res.status(404).json({ error: 'Not found' });
+  const amount = Number(req.body.amount);
+  if (isNaN(amount) || amount <= 0) return res.status(400).json({ error: 'Enter a valid amount.' });
+  const total = Number(appt.amountTotal) || 0;
+  appt.amountPaid = Math.min(total, (Number(appt.amountPaid) || 0) + amount);
+  appt.paymentStatus = appt.amountPaid >= total && total > 0 ? 'paid' : (appt.amountPaid > 0 ? 'installment' : 'debt');
+  store.persist();
+  res.json(appt);
+});
+
+// ---------------------------------------------------------------------------
+// Finance
+// ---------------------------------------------------------------------------
+function financeData({ from, to }) {
+  let list = db.appointments.filter((a) => a.amountTotal != null && Number(a.amountTotal) > 0);
+  if (isNonEmpty(from)) list = list.filter((a) => a.date >= from);
+  if (isNonEmpty(to)) list = list.filter((a) => a.date <= to);
+
+  const docMap = {};
+  db.doctors.forEach((d) => {
+    docMap[d.id] = { id: d.id, name: d.name, count: 0, billed: 0, collected: 0, debt: 0 };
+  });
+
+  let billed = 0, collected = 0;
+  list.forEach((a) => {
+    const total = Number(a.amountTotal) || 0;
+    const paid = Number(a.amountPaid) || 0;
+    billed += total;
+    collected += paid;
+    const m = docMap[a.doctorId] ||
+      (docMap[a.doctorId] = { id: a.doctorId, name: a.doctorName || '—', count: 0, billed: 0, collected: 0, debt: 0 });
+    m.count += 1;
+    m.billed += total;
+    m.collected += paid;
+    m.debt += total - paid;
+  });
+
+  const byDoctor = Object.values(docMap).filter((d) => d.count > 0)
+    .sort((a, b) => b.collected - a.collected);
+
+  const rows = list
+    .slice()
+    .sort((a, b) => (a.date + a.time < b.date + b.time ? 1 : -1))
+    .map((a) => ({
+      date: a.date, time: a.time, patient: a.name, phone: a.phone,
+      doctor: a.doctorName || '',
+      service: a.serviceName ? (a.serviceName.az || a.serviceName.en || '') : '',
+      total: Number(a.amountTotal) || 0,
+      paid: Number(a.amountPaid) || 0,
+      debt: (Number(a.amountTotal) || 0) - (Number(a.amountPaid) || 0),
+      paymentStatus: a.paymentStatus || '',
+      id: a.id,
+    }));
+
+  return {
+    summary: { billed, collected, debt: billed - collected, count: list.length },
+    byDoctor,
+    rows,
+  };
+}
+
+app.get('/api/admin/finance', auth, requireStaff, (req, res) => {
+  res.json(financeData(req.query));
+});
+
+app.get('/api/admin/finance/export', auth, requireStaff, (req, res) => {
+  const data = financeData(req.query);
+  const period = `${req.query.from || 'başlanğıc'} — ${req.query.to || 'bu gün'}`;
+
+  const wb = XLSX.utils.book_new();
+
+  const summarySheet = XLSX.utils.aoa_to_sheet([
+    ['ProImplant — Maliyyə hesabatı'],
+    ['Dövr', period],
+    [],
+    ['Ümumi hesablanmış (billed)', data.summary.billed],
+    ['Yığılmış (collected)', data.summary.collected],
+    ['Borc (debt)', data.summary.debt],
+    ['Əməliyyat sayı', data.summary.count],
+  ]);
+  XLSX.utils.book_append_sheet(wb, summarySheet, 'Xülasə');
+
+  const doctorSheet = XLSX.utils.json_to_sheet(
+    data.byDoctor.map((d) => ({
+      Həkim: d.name, 'Qəbul sayı': d.count, 'Hesablanmış': d.billed,
+      'Yığılmış': d.collected, 'Borc': d.debt,
+    }))
+  );
+  XLSX.utils.book_append_sheet(wb, doctorSheet, 'Həkimlər üzrə');
+
+  const txSheet = XLSX.utils.json_to_sheet(
+    data.rows.map((r) => ({
+      Tarix: r.date, Saat: r.time, Pasiyent: r.patient, Telefon: r.phone,
+      Həkim: r.doctor, Xidmət: r.service, 'Məbləğ': r.total,
+      'Ödənilib': r.paid, 'Borc': r.debt, 'Status': r.paymentStatus,
+    }))
+  );
+  XLSX.utils.book_append_sheet(wb, txSheet, 'Əməliyyatlar');
+
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  res.setHeader('Content-Disposition', 'attachment; filename="proimplant-finance.xlsx"');
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.send(buf);
 });
 
 // --- Doctors CRUD (staff/owner) ---

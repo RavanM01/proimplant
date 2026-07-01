@@ -29,6 +29,7 @@ A complete, self-contained website for **ProImplant Sumqayıt Stomatoloji Klinik
 - Dashboard with live stats (today / pending / confirmed / totals)
 - Appointments: filter by status & date, confirm / complete / cancel / delete
 - **Reports**: totals by status, a 14-day bookings chart, breakdown by doctor and by service (with date range)
+- **Finance**: when you click **Done** you're asked the fee and whether it was **paid / debt / installment**; the Finance section then shows **income per doctor** (daily / monthly / yearly) — billed, collected and outstanding debt — and lets you **export to Excel (.xlsx)**. Debts/installments can be settled later with a "Pay" button.
 - Doctors: full create / edit / delete (bilingual) **+ each doctor's own email and working days/hours**
 - Services: full create / edit / delete (bilingual, price, **duration**, icon)
 - Clinic settings: contact info, address, Instagram, rating, working hours, slot length

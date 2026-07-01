@@ -4,6 +4,7 @@ const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 
 let token = localStorage.getItem('token') || '';
 let me = null;
 let cache = { doctors: [], services: [], settings: null };
+let apptCache = [];
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) =>
@@ -102,11 +103,12 @@ function switchView(view) {
     a.classList.toggle('active', a.dataset.view === view)
   );
   $('#viewTitle').textContent = { dashboard: 'Dashboard', appointments: 'Appointments',
-    reports: 'Reports', doctors: 'Doctors', services: 'Services', settings: 'Clinic settings',
-    admins: 'Admins' }[view];
+    reports: 'Reports', finance: 'Finance', doctors: 'Doctors', services: 'Services',
+    settings: 'Clinic settings', admins: 'Admins' }[view];
   if (view === 'dashboard') renderDashboard();
   if (view === 'appointments') loadAppointments();
   if (view === 'reports') loadReports();
+  if (view === 'finance') loadFinance();
   if (view === 'doctors') renderDoctors();
   if (view === 'services') renderServices();
   if (view === 'settings') renderSettings();
@@ -146,6 +148,154 @@ async function loadReports() {
           r.byService.map((s) => `<tr><td>${esc(s.name)}</td><td>${s.count}</td></tr>`).join('')
         }</tbody></table>`;
   } catch (e) { toast(e.message, 'error'); }
+}
+
+// --- Finance ----------------------------------------------------------------
+const azn = (n) => `${(Math.round((Number(n) || 0) * 100) / 100).toLocaleString('az-AZ')} ₼`;
+const isoDate = (d) => d.toISOString().slice(0, 10);
+const payBadge = { paid: 'completed', installment: 'pending', debt: 'cancelled' };
+
+function setFinancePeriod(period) {
+  const now = new Date();
+  let from, to;
+  if (period === 'today') {
+    from = to = isoDate(now);
+  } else if (period === 'year') {
+    from = isoDate(new Date(now.getFullYear(), 0, 1));
+    to = isoDate(new Date(now.getFullYear(), 11, 31));
+  } else { // month
+    from = isoDate(new Date(now.getFullYear(), now.getMonth(), 1));
+    to = isoDate(new Date(now.getFullYear(), now.getMonth() + 1, 0));
+  }
+  $('#finFrom').value = from;
+  $('#finTo').value = to;
+}
+
+function financeQuery() {
+  const q = new URLSearchParams();
+  if ($('#finFrom').value) q.set('from', $('#finFrom').value);
+  if ($('#finTo').value) q.set('to', $('#finTo').value);
+  return q.toString();
+}
+
+async function loadFinance() {
+  if (!$('#finFrom').value && !$('#finTo').value) setFinancePeriod('month');
+  try {
+    const f = await api('/admin/finance?' + financeQuery());
+    $('#finSummary').innerHTML = [
+      ['Collected', azn(f.summary.collected), 'accent'],
+      ['Billed', azn(f.summary.billed), ''],
+      ['Outstanding debt', azn(f.summary.debt), ''],
+      ['Transactions', f.summary.count, ''],
+    ].map(([l, n, c]) => `<div class="stat-card ${c}"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('');
+
+    $('#finByDoctor').innerHTML = !f.byDoctor.length
+      ? '<div class="empty">No paid appointments in this period.</div>'
+      : `<table><thead><tr><th>Doctor</th><th>Appointments</th><th>Billed</th><th>Collected</th><th>Debt</th></tr></thead><tbody>${
+          f.byDoctor.map((d) => `<tr>
+            <td><b>${esc(d.name)}</b></td><td>${d.count}</td>
+            <td>${azn(d.billed)}</td><td style="color:var(--ok);font-weight:600">${azn(d.collected)}</td>
+            <td style="color:${d.debt > 0 ? 'var(--danger)' : 'var(--muted)'}">${azn(d.debt)}</td>
+          </tr>`).join('')
+        }</tbody></table>`;
+
+    $('#finRows').innerHTML = !f.rows.length
+      ? '<div class="empty">No transactions.</div>'
+      : `<table><thead><tr><th>Date</th><th>Patient</th><th>Doctor</th><th>Service</th><th>Total</th><th>Paid</th><th>Debt</th><th>Status</th><th></th></tr></thead><tbody>${
+          f.rows.map((r) => `<tr>
+            <td>${esc(r.date)}<br><small style="color:var(--muted)">${esc(r.time)}</small></td>
+            <td>${esc(r.patient)}</td><td>${esc(r.doctor)}</td><td>${esc(r.service)}</td>
+            <td>${azn(r.total)}</td><td>${azn(r.paid)}</td>
+            <td style="color:${r.debt > 0 ? 'var(--danger)' : 'var(--muted)'}">${azn(r.debt)}</td>
+            <td><span class="badge ${payBadge[r.paymentStatus] || 'off'}">${r.paymentStatus || '—'}</span></td>
+            <td>${r.debt > 0 ? `<button class="btn btn-sm btn-info" data-pay="${r.id}">₼ Pay</button>` : ''}</td>
+          </tr>`).join('')
+        }</tbody></table>`;
+    document.querySelectorAll('#finRows [data-pay]').forEach((b) =>
+      b.addEventListener('click', () => addPaymentModal(b.dataset.pay, 'finance'))
+    );
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function exportFinance() {
+  try {
+    const r = await fetch('/api/admin/finance/export?' + financeQuery(), {
+      headers: { Authorization: 'Bearer ' + token },
+    });
+    if (!r.ok) throw new Error('Export failed');
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `proimplant-finance-${$('#finFrom').value || 'all'}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    toast('XLSX downloaded', 'success');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// Modal to add a payment towards an existing debt / installment.
+function addPaymentModal(id, back) {
+  openModal(`
+    <h3>Add payment</h3>
+    <div class="field"><label>Amount (AZN)</label><input id="addPayAmount" type="number" min="0" step="0.01" /></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" id="saveAddPay">Add payment</button>
+    </div>`);
+  $('#saveAddPay').addEventListener('click', async () => {
+    try {
+      await api('/admin/appointments/' + id + '/payment', {
+        method: 'POST',
+        body: JSON.stringify({ amount: Number($('#addPayAmount').value) || 0 }),
+      });
+      closeModal();
+      toast('Payment recorded', 'success');
+      if (back === 'finance') loadFinance();
+      else refreshCurrentView();
+    } catch (e) { toast(e.message, 'error'); }
+  });
+}
+
+// "Done" dialog: asks the fee and whether it was paid / debt / installment.
+function paymentModal(id) {
+  const a = apptCache.find((x) => x.id === Number(id)) || {};
+  const def = a.amountTotal != null ? a.amountTotal : (a.priceHint || '');
+  openModal(`
+    <h3>Complete appointment</h3>
+    <p class="sub" style="color:var(--muted);margin-bottom:16px">${esc(a.name || '')} · ${esc(a.date || '')} ${esc(a.time || '')}${a.doctorName ? ' · ' + esc(a.doctorName) : ''}</p>
+    <div class="field"><label>Total fee (AZN)</label><input id="payTotal" type="number" min="0" step="0.01" value="${def}" /></div>
+    <div class="field"><label>Was it paid?</label>
+      <select id="payStatus">
+        <option value="paid">✅ Paid in full</option>
+        <option value="debt">🔴 Debt (unpaid)</option>
+        <option value="installment">🟡 Installment (partial)</option>
+      </select>
+    </div>
+    <div class="field" id="payPartialWrap" style="display:none"><label>Amount paid now (AZN)</label><input id="payPartial" type="number" min="0" step="0.01" value="0" /></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" id="savePay">Mark as done</button>
+    </div>`);
+  $('#payStatus').addEventListener('change', () => {
+    $('#payPartialWrap').style.display = $('#payStatus').value === 'installment' ? 'block' : 'none';
+  });
+  $('#savePay').addEventListener('click', async () => {
+    const body = {
+      status: 'completed',
+      amountTotal: Number($('#payTotal').value) || 0,
+      paymentStatus: $('#payStatus').value,
+      amountPaid: Number($('#payPartial').value) || 0,
+    };
+    try {
+      await api('/admin/appointments/' + id, { method: 'PATCH', body: JSON.stringify(body) });
+      closeModal();
+      toast('Completed & payment recorded', 'success');
+      refreshCurrentView();
+    } catch (e) { toast(e.message, 'error'); }
+  });
 }
 
 async function loadAll() {
@@ -193,21 +343,27 @@ async function loadAppointments() {
 }
 
 function apptTable(appts) {
+  apptCache = appts;
   if (!appts.length) return '<div class="empty">No appointments yet.</div>';
   return `<table><thead><tr>
-    <th>Date / Time</th><th>Patient</th><th>Contact</th><th>Service</th><th>Doctor</th><th>Status</th><th>Actions</th>
+    <th>Date / Time</th><th>Patient</th><th>Contact</th><th>Service</th><th>Doctor</th><th>Status / Payment</th><th>Actions</th>
     </tr></thead><tbody>${appts.map((a) => {
       const sName = a.serviceName ? (a.serviceName.en || a.serviceName.az || '') : '—';
+      const payInfo = a.paymentStatus
+        ? `<br><span class="badge ${payBadge[a.paymentStatus] || 'off'}" title="${azn(a.amountPaid)} / ${azn(a.amountTotal)}">${a.paymentStatus} · ${azn(a.amountPaid)}${a.paymentStatus !== 'paid' ? '/' + azn(a.amountTotal) : ''}</span>`
+        : '';
+      const hasDebt = a.amountTotal != null && (Number(a.amountPaid) || 0) < (Number(a.amountTotal) || 0);
       return `<tr>
         <td><b>${esc(a.date)}</b><br><span style="color:var(--muted)">${esc(a.time)}</span></td>
         <td>${esc(a.name)}${a.message ? `<br><small style="color:var(--muted)">📝 ${esc(a.message)}</small>` : ''}</td>
         <td><a href="tel:${esc(a.phone)}">${esc(a.phone)}</a>${a.email ? `<br><small>${esc(a.email)}</small>` : ''}</td>
         <td>${esc(sName)}${a.durationMin ? ` <small style="color:var(--muted)">${a.durationMin}m</small>` : ''}</td>
         <td>${esc(a.doctorName || '—')}</td>
-        <td><span class="badge ${a.status}">${a.status}</span></td>
+        <td><span class="badge ${a.status}">${a.status}</span>${payInfo}</td>
         <td><div class="row-actions">
           ${a.status !== 'confirmed' ? `<button class="btn btn-sm btn-info" data-act="confirmed" data-id="${a.id}">Confirm</button>` : ''}
           ${a.status !== 'completed' ? `<button class="btn btn-sm btn-success" data-act="completed" data-id="${a.id}">Done</button>` : ''}
+          ${a.status === 'completed' && hasDebt ? `<button class="btn btn-sm btn-info" data-pay="${a.id}">₼ Pay</button>` : ''}
           ${a.status !== 'cancelled' ? `<button class="btn btn-sm btn-ghost" data-act="cancelled" data-id="${a.id}">Cancel</button>` : ''}
           <button class="btn btn-sm btn-danger" data-del="${a.id}">Delete</button>
         </div></td>
@@ -218,6 +374,8 @@ function apptTable(appts) {
 function bindApptActions() {
   document.querySelectorAll('[data-act]').forEach((b) =>
     b.addEventListener('click', async () => {
+      // "Done" opens the payment dialog instead of completing directly.
+      if (b.dataset.act === 'completed') { paymentModal(b.dataset.id); return; }
       try {
         await api('/admin/appointments/' + b.dataset.id, {
           method: 'PATCH',
@@ -227,6 +385,9 @@ function bindApptActions() {
         refreshCurrentView();
       } catch (e) { toast(e.message, 'error'); }
     })
+  );
+  document.querySelectorAll('#apptsWrap [data-pay], #recentApptsWrap [data-pay]').forEach((b) =>
+    b.addEventListener('click', () => addPaymentModal(b.dataset.pay))
   );
   document.querySelectorAll('[data-del]').forEach((b) =>
     b.addEventListener('click', async () => {
@@ -593,6 +754,11 @@ function init() {
   $('#addServiceBtn').addEventListener('click', () => serviceModal(null));
   $('#addAdminBtn').addEventListener('click', adminModal);
   $('#repApply').addEventListener('click', loadReports);
+  $('#finApply').addEventListener('click', loadFinance);
+  $('#finExport').addEventListener('click', exportFinance);
+  document.querySelectorAll('.finperiod').forEach((b) =>
+    b.addEventListener('click', () => { setFinancePeriod(b.dataset.period); loadFinance(); })
+  );
   $('#settingsForm').addEventListener('submit', saveSettings);
   $('#modalBg').addEventListener('click', (e) => { if (e.target.id === 'modalBg') closeModal(); });
 

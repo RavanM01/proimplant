@@ -52,6 +52,7 @@
         <a data-view="dashboard" class="active">📊 Dashboard</a>
         <a data-view="appointments">📅 Appointments</a>
         <a data-view="reports" class="staff-only">📈 Reports</a>
+        <a data-view="finance" class="staff-only">💰 Finance</a>
         <a data-view="doctors" class="staff-only">👨‍⚕️ Doctors</a>
         <a data-view="services" class="staff-only">🦷 Services</a>
         <a data-view="settings" class="staff-only">⚙️ Clinic settings</a>
@@ -125,6 +126,33 @@
             <div class="panel-head"><h2>By service</h2></div>
             <div id="repByService"></div>
           </div>
+        </div>
+      </section>
+
+      <!-- Finance -->
+      <section class="view" id="view-finance">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Finance</h2>
+            <div class="filters">
+              <button class="btn btn-ghost btn-sm finperiod" data-period="today">Today</button>
+              <button class="btn btn-ghost btn-sm finperiod" data-period="month">This month</button>
+              <button class="btn btn-ghost btn-sm finperiod" data-period="year">This year</button>
+              <input type="date" id="finFrom" />
+              <input type="date" id="finTo" />
+              <button class="btn btn-primary btn-sm" id="finApply">Apply</button>
+              <button class="btn btn-success btn-sm" id="finExport">⬇ Export XLSX</button>
+            </div>
+          </div>
+          <div class="stats" id="finSummary"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>Income by doctor</h2></div>
+          <div id="finByDoctor"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>Transactions</h2></div>
+          <div id="finRows"></div>
         </div>
       </section>
 

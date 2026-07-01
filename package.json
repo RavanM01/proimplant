@@ -18,7 +18,8 @@
     "express": "^4.19.2",
     "express-rate-limit": "^7.4.0",
     "jsonwebtoken": "^9.0.2",
-    "nodemailer": "^6.9.14"
+    "nodemailer": "^6.9.14",
+    "xlsx": "^0.18.5"
   },
   "license": "MIT"
 }
