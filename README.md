@@ -131,10 +131,25 @@ proimplant/
 ---
 
 ## 🔒 Production checklist
-- [ ] Set a strong, unique `JWT_SECRET`
-- [ ] Change the default admin email/password
+- [ ] Set a strong, unique `JWT_SECRET` (if unset, a persistent random one is generated under `DATA_DIR/.jwtsecret`)
+- [ ] Change the default admin password (login → **Change password**, or set `ADMIN_PASSWORD`)
 - [ ] Ensure `DATA_DIR` is on persistent storage
-- [ ] Serve over HTTPS (Render/Railway do this automatically)
+- [ ] Set `CLINIC_TZ` (default `Asia/Baku`)
+- [ ] **Run only ONE instance** (the JSON database is single-process — never scale horizontally)
+- [ ] Serve over HTTPS (Render/Railway/Coolify do this automatically)
+
+## 🛡️ Reliability & hardening (built in)
+- **Timezone-correct**: "today", finance periods and past-time checks use `CLINIC_TZ`, not UTC.
+- **Automatic backups**: a daily snapshot of the database is written to `DATA_DIR/backups/` (last 30 days kept).
+- **Persistent JWT secret**: no insecure hardcoded default; a random secret is generated and stored if you don't provide one.
+- **No past bookings**: the API rejects slots in the past; the form hides them.
+- **Payment history**: every payment (and installment) is recorded with its own date; finance counts *collected* by the day money actually came in.
+- **Passwords**: any user can change their own password; the owner can reset any account's password. The env password is **not** silently re-applied on boot (set `ADMIN_FORCE_PASSWORD=true` only for recovery).
+- **Cascade cleanup**: deleting a doctor also removes their linked login account (no orphans).
+- **XSS-safe**: all admin-entered content is HTML-escaped before rendering.
+- **Single dependency-audited stack**: `npm audit` reports 0 vulnerabilities.
+
+> ⚠️ **Scaling note:** this app stores data in a single JSON file for simplicity, which means it must run as a **single process**. For very high volume or multi-instance needs, migrate the store to SQLite or Postgres (the data layer is isolated in `db/store.js`).
 
 ---
 

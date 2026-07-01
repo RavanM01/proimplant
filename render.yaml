@@ -22,6 +22,9 @@ services:
     buildCommand: npm install
     startCommand: node server.js
     healthCheckPath: /api/settings
+    # IMPORTANT: the JSON database assumes a SINGLE process. Do NOT scale beyond
+    # one instance or the data will diverge/corrupt.
+    numInstances: 1
     envVars:
       - key: JWT_SECRET
         generateValue: true
@@ -29,6 +32,8 @@ services:
         value: admin@proimplant.az
       - key: ADMIN_PASSWORD
         sync: false
+      - key: CLINIC_TZ
+        value: Asia/Baku
       # - key: DATA_DIR
       #   value: /var/data
     # disk:

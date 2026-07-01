@@ -94,6 +94,23 @@ const t = (key) => (I18N[lang] && I18N[lang][key]) || key;
 const localized = (obj) => (obj && (obj[lang] || obj.az || obj.en)) || '';
 const $ = (sel) => document.querySelector(sel);
 
+// Escape any admin-entered content before injecting into HTML (prevents XSS).
+const esc = (s) =>
+  String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])
+  );
+
+// Timezone-aware "today" and current time (clinic timezone from settings).
+let TZ = 'Asia/Baku';
+const todayTz = () => new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date());
+const nowTzMinutes = () => {
+  const p = {};
+  new Intl.DateTimeFormat('en-CA', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false })
+    .formatToParts(new Date()).forEach((x) => (p[x.type] = x.value));
+  const hh = p.hour === '24' ? 0 : Number(p.hour);
+  return hh * 60 + Number(p.minute);
+};
+
 function applyI18n() {
   document.documentElement.lang = lang;
   document.querySelectorAll('[data-i18n]').forEach((el) => {
@@ -113,6 +130,7 @@ async function fetchJSON(url) {
 // --- Render functions -------------------------------------------------------
 function renderSettings() {
   if (!settings) return;
+  if (settings.timezone) TZ = settings.timezone;
   $('#heroRating').textContent = settings.rating || '4.8';
   $('#heroReviews').textContent = settings.reviewCount || '';
   $('#hcAddress').textContent = localized(settings.address);
@@ -184,12 +202,12 @@ function renderServices() {
     .map(
       (s) => `
     <div class="service-card">
-      <div class="ic">${s.icon || '🦷'}</div>
-      <h3>${localized(s.name)}</h3>
-      <p>${localized(s.description)}</p>
+      <div class="ic">${esc(s.icon) || '🦷'}</div>
+      <h3>${esc(localized(s.name))}</h3>
+      <p>${esc(localized(s.description))}</p>
       <div class="meta">
-        <span class="price">${s.price ? s.price : ''}</span>
-        <span class="dur">⏱ ${s.durationMin} ${t('min')}</span>
+        <span class="price">${esc(s.price || '')}</span>
+        <span class="dur">⏱ ${Number(s.durationMin) || 0} ${t('min')}</span>
       </div>
     </div>`
     )
@@ -198,7 +216,7 @@ function renderServices() {
   const sel = $('#formService');
   sel.innerHTML =
     `<option value="">${t('form.selectService')}</option>` +
-    services.map((s) => `<option value="${s.id}">${localized(s.name)}</option>`).join('');
+    services.map((s) => `<option value="${s.id}">${esc(localized(s.name))}</option>`).join('');
 }
 
 function renderDoctors() {
@@ -206,11 +224,11 @@ function renderDoctors() {
     .map(
       (d) => `
     <div class="doctor-card">
-      <div class="doctor-photo">${d.photo ? `<img src="${d.photo}" alt="${d.name}">` : '👨‍⚕️'}</div>
+      <div class="doctor-photo">${d.photo ? `<img src="${esc(d.photo)}" alt="${esc(d.name)}">` : '👨‍⚕️'}</div>
       <div class="body">
-        <h3>${d.name}</h3>
-        <div class="spec">${localized(d.specialty)}</div>
-        <div class="bio">${localized(d.bio)}</div>
+        <h3>${esc(d.name)}</h3>
+        <div class="spec">${esc(localized(d.specialty))}</div>
+        <div class="bio">${esc(localized(d.bio))}</div>
       </div>
     </div>`
     )
@@ -219,7 +237,7 @@ function renderDoctors() {
   const sel = $('#formDoctor');
   sel.innerHTML =
     `<option value="">${t('form.selectDoctor')}</option>` +
-    doctors.map((d) => `<option value="${d.id}">${d.name}</option>`).join('');
+    doctors.map((d) => `<option value="${d.id}">${esc(d.name)}</option>`).join('');
 }
 
 // --- Booking time slots (duration-aware, per selected doctor) ----------------
@@ -271,8 +289,11 @@ async function refreshTimeSlots() {
     }));
   } catch {}
 
+  // For today, don't offer times that have already passed (clinic timezone).
+  const minStart = date === todayTz() ? nowTzMinutes() : -1;
   const available = [];
   for (let m = open; m + duration <= close; m += step) {
+    if (m < minStart) continue;
     const overlaps = booked.some((r) => m < r.e && r.s < m + duration);
     if (!overlaps) available.push(fmt(m));
   }
@@ -334,8 +355,7 @@ function showMsg(type, text) {
 // --- Init -------------------------------------------------------------------
 function setupDate() {
   const d = $('#formDate');
-  const today = new Date().toISOString().slice(0, 10);
-  d.min = today;
+  d.min = todayTz();
   d.addEventListener('change', refreshTimeSlots);
   // Slots depend on doctor + service + date, so recompute when any changes.
   $('#formDoctor').addEventListener('change', refreshTimeSlots);

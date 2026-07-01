@@ -5,6 +5,7 @@ let token = localStorage.getItem('token') || '';
 let me = null;
 let cache = { doctors: [], services: [], settings: null };
 let apptCache = [];
+let ADMIN_TZ = 'Asia/Baku';
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) =>
@@ -80,6 +81,7 @@ async function showApp() {
   $('#loginWrap').style.display = 'none';
   $('#app').classList.add('show');
   $('#whoName').textContent = me ? `${me.name}${me.role === 'doctor' ? ' (Doctor)' : ''}` : '';
+  try { ADMIN_TZ = (await (await fetch('/api/settings')).json()).timezone || ADMIN_TZ; } catch {}
   applyRoleVisibility();
   // Doctor accounts only see their own appointments, so skip loading the
   // staff-only collections (they'd 403 anyway).
@@ -152,20 +154,23 @@ async function loadReports() {
 
 // --- Finance ----------------------------------------------------------------
 const azn = (n) => `${(Math.round((Number(n) || 0) * 100) / 100).toLocaleString('az-AZ')} ₼`;
-const isoDate = (d) => d.toISOString().slice(0, 10);
+const pad2 = (n) => String(n).padStart(2, '0');
+const tzToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: ADMIN_TZ }).format(new Date());
 const payBadge = { paid: 'completed', installment: 'pending', debt: 'cancelled' };
 
 function setFinancePeriod(period) {
-  const now = new Date();
+  // Build ranges from the clinic-timezone date parts (no UTC off-by-one).
+  const [y, m] = tzToday().split('-').map(Number);
   let from, to;
   if (period === 'today') {
-    from = to = isoDate(now);
+    from = to = tzToday();
   } else if (period === 'year') {
-    from = isoDate(new Date(now.getFullYear(), 0, 1));
-    to = isoDate(new Date(now.getFullYear(), 11, 31));
+    from = `${y}-01-01`;
+    to = `${y}-12-31`;
   } else { // month
-    from = isoDate(new Date(now.getFullYear(), now.getMonth(), 1));
-    to = isoDate(new Date(now.getFullYear(), now.getMonth() + 1, 0));
+    const lastDay = new Date(y, m, 0).getDate(); // day count is timezone-independent
+    from = `${y}-${pad2(m)}-01`;
+    to = `${y}-${pad2(m)}-${pad2(lastDay)}`;
   }
   $('#finFrom').value = from;
   $('#finTo').value = to;
@@ -426,11 +431,11 @@ function renderDoctors() {
   );
   document.querySelectorAll('[data-del-doc]').forEach((b) =>
     b.addEventListener('click', async () => {
-      if (!confirm('Delete this doctor?')) return;
-      await api('/admin/doctors/' + b.dataset.delDoc, { method: 'DELETE' });
+      if (!confirm('Delete this doctor? Any linked login account will also be removed.')) return;
+      const r = await api('/admin/doctors/' + b.dataset.delDoc, { method: 'DELETE' });
       cache.doctors = await api('/admin/doctors');
       renderDoctors();
-      toast('Deleted', 'success');
+      toast(r.removedAccounts ? `Deleted (+${r.removedAccounts} login removed)` : 'Deleted', 'success');
     })
   );
 }
@@ -668,9 +673,12 @@ async function loadAdmins() {
       admins.map((a) => `<tr>
         <td><b>${esc(a.name)}</b></td><td>${esc(a.email)}</td>
         <td><span class="badge ${roleBadge[a.role] || 'off'}">${a.role}</span>${a.role === 'doctor' && a.doctorId ? ` <small style="color:var(--muted)">${esc(docName(a.doctorId))}</small>` : ''}</td>
-        <td>${me && me.role === 'owner' && a.id !== me.id ? `<button class="btn btn-sm btn-danger" data-del-admin="${a.id}">Delete</button>` : ''}</td>
+        <td><div class="row-actions">${me && me.role === 'owner' ? `<button class="btn btn-sm btn-ghost" data-reset-admin="${a.id}" data-name="${esc(a.name)}">Reset pw</button>` : ''}${me && me.role === 'owner' && a.id !== me.id ? `<button class="btn btn-sm btn-danger" data-del-admin="${a.id}">Delete</button>` : ''}</div></td>
       </tr>`).join('')
     }</tbody></table>`;
+    document.querySelectorAll('[data-reset-admin]').forEach((b) =>
+      b.addEventListener('click', () => resetPasswordModal(b.dataset.resetAdmin, b.dataset.name))
+    );
     document.querySelectorAll('[data-del-admin]').forEach((b) =>
       b.addEventListener('click', async () => {
         if (!confirm('Delete this admin?')) return;
@@ -726,6 +734,51 @@ function adminModal() {
   });
 }
 
+// Change your own password.
+function changePasswordModal() {
+  openModal(`
+    <h3>Change password</h3>
+    <div class="field"><label>Current password</label><input id="cpCurrent" type="password" /></div>
+    <div class="field"><label>New password (min 6 chars)</label><input id="cpNew" type="password" /></div>
+    <div class="field"><label>Repeat new password</label><input id="cpNew2" type="password" /></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" id="saveCp">Change</button>
+    </div>`);
+  $('#saveCp').addEventListener('click', async () => {
+    if ($('#cpNew').value !== $('#cpNew2').value) return toast('Passwords do not match', 'error');
+    try {
+      await api('/auth/password', {
+        method: 'POST',
+        body: JSON.stringify({ currentPassword: $('#cpCurrent').value, newPassword: $('#cpNew').value }),
+      });
+      closeModal();
+      toast('Password changed', 'success');
+    } catch (e) { toast(e.message, 'error'); }
+  });
+}
+
+// Owner resets another account's password.
+function resetPasswordModal(id, name) {
+  openModal(`
+    <h3>Reset password</h3>
+    <p class="sub" style="color:var(--muted);margin-bottom:14px">${esc(name || '')}</p>
+    <div class="field"><label>New password (min 6 chars)</label><input id="rpNew" type="text" /></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" id="saveRp">Reset</button>
+    </div>`);
+  $('#saveRp').addEventListener('click', async () => {
+    try {
+      await api('/admin/admins/' + id + '/password', {
+        method: 'PUT', body: JSON.stringify({ password: $('#rpNew').value }),
+      });
+      closeModal();
+      toast('Password reset', 'success');
+    } catch (e) { toast(e.message, 'error'); }
+  });
+}
+
 // --- Modal ------------------------------------------------------------------
 function openModal(html) {
   $('#modal').innerHTML = html;
@@ -740,6 +793,7 @@ window.closeModal = closeModal;
 function init() {
   $('#loginForm').addEventListener('submit', login);
   $('#logoutBtn').addEventListener('click', logout);
+  $('#changePwBtn').addEventListener('click', changePasswordModal);
   document.querySelectorAll('.sidebar nav a[data-view]').forEach((a) =>
     a.addEventListener('click', () => switchView(a.dataset.view))
   );

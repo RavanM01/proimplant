@@ -26,14 +26,15 @@ if (!existingAdmin) {
   });
   console.log(`Created admin: ${ADMIN_EMAIL}`);
 } else if (
+  process.env.ADMIN_FORCE_PASSWORD === 'true' &&
   process.env.ADMIN_PASSWORD &&
   !bcrypt.compareSync(process.env.ADMIN_PASSWORD, existingAdmin.passwordHash)
 ) {
-  // ADMIN_PASSWORD env is the source of truth: keep the bootstrap admin's
-  // password in sync with it on every boot. This guarantees you can always
-  // recover access on a host (e.g. Render) by setting the env var.
+  // Recovery path only: reset the bootstrap admin's password from the env var,
+  // but ONLY when ADMIN_FORCE_PASSWORD=true is set. Normally the password is
+  // NOT touched on boot (so password changes made in the panel persist).
   existingAdmin.passwordHash = bcrypt.hashSync(process.env.ADMIN_PASSWORD, 10);
-  console.log(`Synced password for ${ADMIN_EMAIL} from ADMIN_PASSWORD env.`);
+  console.log(`Reset password for ${ADMIN_EMAIL} (ADMIN_FORCE_PASSWORD=true).`);
 }
 
 // ---- Clinic settings -------------------------------------------------------
@@ -192,6 +193,15 @@ db.doctors.forEach((d) => {
 });
 db.admins.forEach((a) => {
   if (a.doctorId === undefined) a.doctorId = null;
+});
+// Backfill a payments[] history for appointments recorded before that feature.
+db.appointments.forEach((a) => {
+  if (a.amountTotal != null && !Array.isArray(a.payments)) {
+    const paid = Number(a.amountPaid) || 0;
+    a.payments = paid > 0
+      ? [{ amount: paid, at: a.paidAt || a.createdAt || new Date().toISOString(), date: (a.paidAt || a.createdAt || '').slice(0, 10) || a.date }]
+      : [];
+  }
 });
 
 store.persist();

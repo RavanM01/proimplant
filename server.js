@@ -4,11 +4,13 @@
  */
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
+const fs = require('fs');
+const crypto = require('crypto');
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
-const XLSX = require('xlsx');
+const ExcelJS = require('exceljs');
 
 const store = require('./db/store');
 const notify = require('./db/notify');
@@ -18,7 +20,28 @@ require('./db/seed');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const JWT_SECRET = process.env.JWT_SECRET || 'change-this-secret-in-production';
+const CLINIC_TZ = process.env.CLINIC_TZ || 'Asia/Baku';
+
+// --- JWT secret: use env if set, otherwise a persistent random secret on disk
+// (so sessions survive restarts and there is no insecure hardcoded default).
+function resolveJwtSecret() {
+  const env = process.env.JWT_SECRET;
+  if (env && env !== 'change-this-secret-in-production' && env !== 'please-change-this-to-a-long-random-string') {
+    return env;
+  }
+  const f = path.join(store.DATA_DIR, '.jwtsecret');
+  try {
+    if (fs.existsSync(f)) return fs.readFileSync(f, 'utf8').trim();
+    const secret = crypto.randomBytes(32).toString('hex');
+    fs.writeFileSync(f, secret);
+    console.warn(`[warn] JWT_SECRET not set — generated a persistent one at ${f}. Set JWT_SECRET in production.`);
+    return secret;
+  } catch {
+    console.warn('[warn] JWT_SECRET not set and could not persist one — using an ephemeral secret (sessions reset on restart).');
+    return crypto.randomBytes(32).toString('hex');
+  }
+}
+const JWT_SECRET = resolveJwtSecret();
 
 app.set('trust proxy', 1);
 app.use(express.json({ limit: '1mb' }));
@@ -43,13 +66,30 @@ function rangesOverlap(s1, e1, s2, e2) {
   return s1 < e2 && s2 < e1;
 }
 function dayOfDate(date) {
-  return new Date(date + 'T00:00:00').getDay();
+  // Weekday of a YYYY-MM-DD date, timezone-independent (parsed as UTC midday).
+  return new Date(date + 'T12:00:00Z').getUTCDay();
 }
-// Extract a numeric fee from a free-text price label like "dən 400 AZN" -> 400.
+// Current date + minutes in the clinic's timezone (fixes UTC/off-by-one bugs).
+function nowInClinicTz() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: CLINIC_TZ, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(new Date());
+  const o = {};
+  parts.forEach((p) => (o[p.type] = p.value));
+  const hh = o.hour === '24' ? 0 : Number(o.hour);
+  return { date: `${o.year}-${o.month}-${o.day}`, minutes: hh * 60 + Number(o.minute) };
+}
+function todayLocal() {
+  return nowInClinicTz().date;
+}
 function parsePrice(str) {
   if (typeof str !== 'string') return 0;
   const m = str.replace(',', '.').match(/\d+(\.\d+)?/);
   return m ? Number(m[0]) : 0;
+}
+function sumPayments(a) {
+  return (a.payments || []).reduce((s, p) => s + (Number(p.amount) || 0), 0);
 }
 
 function publicSettings() {
@@ -58,11 +98,10 @@ function publicSettings() {
     clinicName: s.clinicName, tagline: s.tagline, phone: s.phone, phone2: s.phone2,
     email: s.email, address: s.address, instagram: s.instagram, website: s.website,
     mapsQuery: s.mapsQuery, rating: s.rating, reviewCount: s.reviewCount,
-    hours: s.hours, slotMinutes: s.slotMinutes,
+    hours: s.hours, slotMinutes: s.slotMinutes, timezone: CLINIC_TZ,
   };
 }
 
-// Public doctor view — never expose the doctor's email publicly.
 function publicDoctor(d) {
   return {
     id: d.id, name: d.name, specialty: d.specialty, bio: d.bio,
@@ -90,8 +129,6 @@ function auth(req, res, next) {
   }
 }
 
-// Staff = owner or staff (i.e. NOT a doctor account). Doctors are limited to
-// their own appointments only.
 function requireStaff(req, res, next) {
   if (req.admin.role === 'doctor') return res.status(403).json({ error: 'Not allowed for doctor accounts.' });
   next();
@@ -117,7 +154,6 @@ app.get('/api/doctors', (req, res) => {
   res.json(db.doctors.filter((d) => d.active !== false).map(publicDoctor));
 });
 
-// Booked ranges for a doctor on a date, so the form can block overlapping slots.
 app.get('/api/availability', (req, res) => {
   const { date, doctorId } = req.query;
   if (!isNonEmpty(date) || !isNonEmpty(doctorId)) return res.json({ booked: [] });
@@ -128,7 +164,6 @@ app.get('/api/availability', (req, res) => {
   res.json({ booked });
 });
 
-// Create a reservation (public).
 app.post('/api/appointments', bookingLimiter, (req, res) => {
   const { name, phone, email, serviceId, doctorId, date, time, message } = req.body || {};
 
@@ -147,16 +182,20 @@ app.post('/api/appointments', bookingLimiter, (req, res) => {
   const start = toMin(time);
   const end = start + duration;
 
-  // Must be within the selected doctor's working hours for that weekday.
+  // Reject bookings in the past (clinic timezone).
+  const now = nowInClinicTz();
+  if (date < now.date || (date === now.date && start < now.minutes)) {
+    return res.status(409).json({ error: 'This time is in the past. Please pick a future slot.' });
+  }
+
   const wh = (doctor.hours || []).find((h) => h.day === dayOfDate(date));
   if (!wh || wh.closed) {
     return res.status(409).json({ error: 'The doctor is not available on this day.' });
   }
   if (start < toMin(wh.open) || end > toMin(wh.close)) {
-    return res.status(409).json({ error: 'Selected time is outside the doctor\'s working hours.' });
+    return res.status(409).json({ error: "Selected time is outside the doctor's working hours." });
   }
 
-  // Reject any overlap with the same doctor's existing appointments (duration-aware).
   const clash = db.appointments.some(
     (a) =>
       a.doctorId === doctor.id &&
@@ -188,7 +227,6 @@ app.post('/api/appointments', bookingLimiter, (req, res) => {
   db.appointments.push(appointment);
   store.persist();
 
-  // Notify the doctor by email (fire-and-forget; never blocks the booking).
   const svcName = service ? (service.name.az || service.name.en) : '—';
   notify.sendMail({
     to: doctor.email,
@@ -226,6 +264,22 @@ app.post('/api/auth/login', authLimiter, (req, res) => {
 
 app.get('/api/auth/me', auth, (req, res) => res.json({ admin: req.admin }));
 
+// Change your own password.
+app.post('/api/auth/password', auth, (req, res) => {
+  const { currentPassword, newPassword } = req.body || {};
+  if (!isNonEmpty(newPassword) || newPassword.length < 6) {
+    return res.status(400).json({ error: 'New password must be at least 6 characters.' });
+  }
+  const admin = db.admins.find((a) => a.id === req.admin.id);
+  if (!admin) return res.status(404).json({ error: 'Account not found.' });
+  if (!bcrypt.compareSync(currentPassword || '', admin.passwordHash)) {
+    return res.status(401).json({ error: 'Current password is incorrect.' });
+  }
+  admin.passwordHash = bcrypt.hashSync(newPassword, 10);
+  store.persist();
+  res.json({ ok: true });
+});
+
 // ---------------------------------------------------------------------------
 // Admin API (protected)
 // ---------------------------------------------------------------------------
@@ -234,7 +288,7 @@ app.get('/api/admin/stats', auth, (req, res) => {
   const appts = isDoctor
     ? db.appointments.filter((a) => a.doctorId === req.admin.doctorId)
     : db.appointments;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayLocal();
   res.json({
     total: appts.length,
     pending: appts.filter((a) => a.status === 'pending').length,
@@ -245,7 +299,6 @@ app.get('/api/admin/stats', auth, (req, res) => {
   });
 });
 
-// --- Reports (staff/owner) ---
 app.get('/api/admin/reports', auth, requireStaff, (req, res) => {
   const { from, to } = req.query;
   let list = [...db.appointments];
@@ -277,9 +330,10 @@ app.get('/api/admin/reports', auth, requireStaff, (req, res) => {
     .sort((a, b) => b.count - a.count);
 
   const byDay = [];
+  const base = todayLocal();
   for (let i = 13; i >= 0; i--) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
+    const d = new Date(base + 'T12:00:00Z');
+    d.setUTCDate(d.getUTCDate() - i);
     const key = d.toISOString().slice(0, 10);
     byDay.push({ date: key, count: db.appointments.filter((a) => a.date === key && a.status !== 'cancelled').length });
   }
@@ -290,12 +344,13 @@ app.get('/api/admin/reports', auth, requireStaff, (req, res) => {
 // --- Appointments ---
 app.get('/api/admin/appointments', auth, (req, res) => {
   const { status, date } = req.query;
+  const limit = Math.min(Number(req.query.limit) || 300, 2000);
   let list = [...db.appointments];
   if (req.admin.role === 'doctor') list = list.filter((a) => a.doctorId === req.admin.doctorId);
   if (isNonEmpty(status)) list = list.filter((a) => a.status === status);
   if (isNonEmpty(date)) list = list.filter((a) => a.date === date);
   list.sort((a, b) => (a.date + a.time < b.date + b.time ? 1 : -1));
-  res.json(list);
+  res.json(list.slice(0, limit));
 });
 
 app.patch('/api/admin/appointments/:id', auth, (req, res) => {
@@ -314,18 +369,19 @@ app.patch('/api/admin/appointments/:id', auth, (req, res) => {
   if (status === 'completed' && req.body.amountTotal !== undefined) {
     const total = Math.max(0, Number(req.body.amountTotal) || 0);
     const pstatus = req.body.paymentStatus;
-    let paid = 0;
-    if (pstatus === 'paid') paid = total;
-    else if (pstatus === 'installment') paid = Math.max(0, Math.min(total, Number(req.body.amountPaid) || 0));
-    else paid = 0; // debt
+    let firstPaid = 0;
+    if (pstatus === 'paid') firstPaid = total;
+    else if (pstatus === 'installment') firstPaid = Math.max(0, Math.min(total, Number(req.body.amountPaid) || 0));
     appt.amountTotal = total;
-    appt.amountPaid = paid;
-    appt.paymentStatus = paid >= total && total > 0 ? 'paid' : (paid > 0 ? 'installment' : 'debt');
+    appt.payments = firstPaid > 0
+      ? [{ amount: firstPaid, at: new Date().toISOString(), date: todayLocal() }]
+      : [];
+    appt.amountPaid = Math.min(total, sumPayments(appt));
+    appt.paymentStatus = appt.amountPaid >= total && total > 0 ? 'paid' : (appt.amountPaid > 0 ? 'installment' : 'debt');
     appt.paidAt = new Date().toISOString();
   }
   store.persist();
 
-  // SMS the patient when the status meaningfully changes.
   if (status && status !== prevStatus && ['confirmed', 'cancelled', 'completed'].includes(status)) {
     const msgs = {
       confirmed: `Hörmətli ${appt.name}, ${appt.date} ${appt.time} tarixli qəbulunuz TƏSDİQLƏNDİ. ProImplant`,
@@ -353,105 +409,152 @@ app.post('/api/admin/appointments/:id/payment', auth, requireStaff, (req, res) =
   const amount = Number(req.body.amount);
   if (isNaN(amount) || amount <= 0) return res.status(400).json({ error: 'Enter a valid amount.' });
   const total = Number(appt.amountTotal) || 0;
-  appt.amountPaid = Math.min(total, (Number(appt.amountPaid) || 0) + amount);
+  if (!Array.isArray(appt.payments)) appt.payments = [];
+  appt.payments.push({ amount, at: new Date().toISOString(), date: todayLocal() });
+  appt.amountPaid = Math.min(total, sumPayments(appt));
   appt.paymentStatus = appt.amountPaid >= total && total > 0 ? 'paid' : (appt.amountPaid > 0 ? 'installment' : 'debt');
   store.persist();
   res.json(appt);
 });
 
 // ---------------------------------------------------------------------------
-// Finance
+// Finance — billed by service date, collected by PAYMENT date (accurate cash).
 // ---------------------------------------------------------------------------
 function financeData({ from, to }) {
-  let list = db.appointments.filter((a) => a.amountTotal != null && Number(a.amountTotal) > 0);
-  if (isNonEmpty(from)) list = list.filter((a) => a.date >= from);
-  if (isNonEmpty(to)) list = list.filter((a) => a.date <= to);
+  const inRange = (d) => (!isNonEmpty(from) || d >= from) && (!isNonEmpty(to) || d <= to);
+  const billedList = db.appointments.filter((a) => a.amountTotal != null && Number(a.amountTotal) > 0);
 
   const docMap = {};
-  db.doctors.forEach((d) => {
-    docMap[d.id] = { id: d.id, name: d.name, count: 0, billed: 0, collected: 0, debt: 0 };
-  });
+  const doc = (id, name) =>
+    (docMap[id] ||= { id, name: name || '—', count: 0, billed: 0, collected: 0, debt: 0 });
+  db.doctors.forEach((d) => doc(d.id, d.name));
 
-  let billed = 0, collected = 0;
-  list.forEach((a) => {
+  let billed = 0, collected = 0, debt = 0, count = 0;
+
+  // Billed + outstanding debt: by service (appointment) date.
+  billedList.forEach((a) => {
+    if (!inRange(a.date)) return;
     const total = Number(a.amountTotal) || 0;
-    const paid = Number(a.amountPaid) || 0;
+    const paid = Math.min(total, sumPayments(a));
     billed += total;
-    collected += paid;
-    const m = docMap[a.doctorId] ||
-      (docMap[a.doctorId] = { id: a.doctorId, name: a.doctorName || '—', count: 0, billed: 0, collected: 0, debt: 0 });
+    debt += total - paid;
+    count += 1;
+    const m = doc(a.doctorId, a.doctorName);
     m.count += 1;
     m.billed += total;
-    m.collected += paid;
     m.debt += total - paid;
   });
 
-  const byDoctor = Object.values(docMap).filter((d) => d.count > 0)
+  // Collected: by the date the money actually came in (payment date).
+  db.appointments.forEach((a) => {
+    (a.payments || []).forEach((p) => {
+      const pd = p.date || (a.paidAt || '').slice(0, 10) || a.date;
+      if (!inRange(pd)) return;
+      collected += Number(p.amount) || 0;
+      doc(a.doctorId, a.doctorName).collected += Number(p.amount) || 0;
+    });
+  });
+
+  const byDoctor = Object.values(docMap)
+    .filter((d) => d.count > 0 || d.collected > 0)
     .sort((a, b) => b.collected - a.collected);
 
-  const rows = list
-    .slice()
+  const rows = billedList
+    .filter((a) => inRange(a.date))
     .sort((a, b) => (a.date + a.time < b.date + b.time ? 1 : -1))
-    .map((a) => ({
-      date: a.date, time: a.time, patient: a.name, phone: a.phone,
-      doctor: a.doctorName || '',
-      service: a.serviceName ? (a.serviceName.az || a.serviceName.en || '') : '',
-      total: Number(a.amountTotal) || 0,
-      paid: Number(a.amountPaid) || 0,
-      debt: (Number(a.amountTotal) || 0) - (Number(a.amountPaid) || 0),
-      paymentStatus: a.paymentStatus || '',
-      id: a.id,
-    }));
+    .map((a) => {
+      const total = Number(a.amountTotal) || 0;
+      const paid = Math.min(total, sumPayments(a));
+      return {
+        id: a.id, date: a.date, time: a.time, patient: a.name, phone: a.phone,
+        doctor: a.doctorName || '',
+        service: a.serviceName ? (a.serviceName.az || a.serviceName.en || '') : '',
+        total, paid, debt: total - paid, paymentStatus: a.paymentStatus || '',
+      };
+    });
 
-  return {
-    summary: { billed, collected, debt: billed - collected, count: list.length },
-    byDoctor,
-    rows,
-  };
+  const payments = [];
+  db.appointments.forEach((a) => {
+    (a.payments || []).forEach((p) => {
+      const pd = p.date || (a.paidAt || '').slice(0, 10) || a.date;
+      if (inRange(pd)) {
+        payments.push({ date: pd, patient: a.name, doctor: a.doctorName || '', amount: Number(p.amount) || 0 });
+      }
+    });
+  });
+
+  return { summary: { billed, collected, debt, count }, byDoctor, rows, payments };
 }
 
 app.get('/api/admin/finance', auth, requireStaff, (req, res) => {
   res.json(financeData(req.query));
 });
 
-app.get('/api/admin/finance/export', auth, requireStaff, (req, res) => {
-  const data = financeData(req.query);
-  const period = `${req.query.from || 'başlanğıc'} — ${req.query.to || 'bu gün'}`;
+app.get('/api/admin/finance/export', auth, requireStaff, async (req, res) => {
+  try {
+    const data = financeData(req.query);
+    const period = `${req.query.from || 'başlanğıc'} — ${req.query.to || 'bu gün'}`;
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'ProImplant';
 
-  const wb = XLSX.utils.book_new();
+    const s1 = wb.addWorksheet('Xülasə');
+    s1.columns = [{ width: 32 }, { width: 18 }];
+    s1.addRows([
+      ['ProImplant — Maliyyə hesabatı'],
+      ['Dövr', period],
+      [],
+      ['Ümumi hesablanmış (billed)', data.summary.billed],
+      ['Yığılmış (collected)', data.summary.collected],
+      ['Borc (debt)', data.summary.debt],
+      ['Əməliyyat sayı', data.summary.count],
+    ]);
+    s1.getRow(1).font = { bold: true, size: 14 };
 
-  const summarySheet = XLSX.utils.aoa_to_sheet([
-    ['ProImplant — Maliyyə hesabatı'],
-    ['Dövr', period],
-    [],
-    ['Ümumi hesablanmış (billed)', data.summary.billed],
-    ['Yığılmış (collected)', data.summary.collected],
-    ['Borc (debt)', data.summary.debt],
-    ['Əməliyyat sayı', data.summary.count],
-  ]);
-  XLSX.utils.book_append_sheet(wb, summarySheet, 'Xülasə');
+    const s2 = wb.addWorksheet('Həkimlər üzrə');
+    s2.columns = [
+      { header: 'Həkim', key: 'name', width: 28 },
+      { header: 'Qəbul sayı', key: 'count', width: 12 },
+      { header: 'Hesablanmış', key: 'billed', width: 14 },
+      { header: 'Yığılmış', key: 'collected', width: 14 },
+      { header: 'Borc', key: 'debt', width: 14 },
+    ];
+    data.byDoctor.forEach((d) => s2.addRow(d));
+    s2.getRow(1).font = { bold: true };
 
-  const doctorSheet = XLSX.utils.json_to_sheet(
-    data.byDoctor.map((d) => ({
-      Həkim: d.name, 'Qəbul sayı': d.count, 'Hesablanmış': d.billed,
-      'Yığılmış': d.collected, 'Borc': d.debt,
-    }))
-  );
-  XLSX.utils.book_append_sheet(wb, doctorSheet, 'Həkimlər üzrə');
+    const s3 = wb.addWorksheet('Əməliyyatlar');
+    s3.columns = [
+      { header: 'Tarix', key: 'date', width: 12 },
+      { header: 'Saat', key: 'time', width: 8 },
+      { header: 'Pasiyent', key: 'patient', width: 22 },
+      { header: 'Telefon', key: 'phone', width: 16 },
+      { header: 'Həkim', key: 'doctor', width: 22 },
+      { header: 'Xidmət', key: 'service', width: 22 },
+      { header: 'Məbləğ', key: 'total', width: 12 },
+      { header: 'Ödənilib', key: 'paid', width: 12 },
+      { header: 'Borc', key: 'debt', width: 12 },
+      { header: 'Status', key: 'paymentStatus', width: 12 },
+    ];
+    data.rows.forEach((r) => s3.addRow(r));
+    s3.getRow(1).font = { bold: true };
 
-  const txSheet = XLSX.utils.json_to_sheet(
-    data.rows.map((r) => ({
-      Tarix: r.date, Saat: r.time, Pasiyent: r.patient, Telefon: r.phone,
-      Həkim: r.doctor, Xidmət: r.service, 'Məbləğ': r.total,
-      'Ödənilib': r.paid, 'Borc': r.debt, 'Status': r.paymentStatus,
-    }))
-  );
-  XLSX.utils.book_append_sheet(wb, txSheet, 'Əməliyyatlar');
+    const s4 = wb.addWorksheet('Ödənişlər');
+    s4.columns = [
+      { header: 'Ödəniş tarixi', key: 'date', width: 14 },
+      { header: 'Pasiyent', key: 'patient', width: 22 },
+      { header: 'Həkim', key: 'doctor', width: 22 },
+      { header: 'Məbləğ', key: 'amount', width: 12 },
+    ];
+    data.payments.forEach((p) => s4.addRow(p));
+    s4.getRow(1).font = { bold: true };
 
-  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
-  res.setHeader('Content-Disposition', 'attachment; filename="proimplant-finance.xlsx"');
-  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-  res.send(buf);
+    res.setHeader('Content-Disposition', 'attachment; filename="proimplant-finance.xlsx"');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    await wb.xlsx.write(res);
+    res.end();
+  } catch (err) {
+    console.error('[export:error]', err.message);
+    res.status(500).json({ error: 'Export failed.' });
+  }
 });
 
 // --- Doctors CRUD (staff/owner) ---
@@ -502,11 +605,15 @@ app.put('/api/admin/doctors/:id', auth, requireStaff, (req, res) => {
 });
 
 app.delete('/api/admin/doctors/:id', auth, requireStaff, (req, res) => {
-  const i = db.doctors.findIndex((d) => d.id === Number(req.params.id));
+  const id = Number(req.params.id);
+  const i = db.doctors.findIndex((d) => d.id === id);
   if (i === -1) return res.status(404).json({ error: 'Not found' });
   db.doctors.splice(i, 1);
+  // Cascade: remove any login accounts linked to this doctor (no orphans).
+  const removed = db.admins.filter((a) => a.role === 'doctor' && a.doctorId === id).length;
+  db.admins = db.admins.filter((a) => !(a.role === 'doctor' && a.doctorId === id));
   store.persist();
-  res.json({ ok: true });
+  res.json({ ok: true, removedAccounts: removed });
 });
 
 // --- Services CRUD (staff/owner) ---
@@ -585,9 +692,9 @@ app.post('/api/admin/admins', auth, requireOwner, (req, res) => {
   const finalRole = ['owner', 'staff', 'doctor'].includes(role) ? role : 'staff';
   let linkedDoctorId = null;
   if (finalRole === 'doctor') {
-    const doc = db.doctors.find((d) => d.id === Number(doctorId));
-    if (!doc) return res.status(400).json({ error: 'Select which doctor this account belongs to.' });
-    linkedDoctorId = doc.id;
+    const docExists = db.doctors.find((d) => d.id === Number(doctorId));
+    if (!docExists) return res.status(400).json({ error: 'Select which doctor this account belongs to.' });
+    linkedDoctorId = docExists.id;
   }
   const admin = {
     id: store.nextId(),
@@ -604,6 +711,19 @@ app.post('/api/admin/admins', auth, requireOwner, (req, res) => {
   res.status(201).json(safe);
 });
 
+// Owner resets another account's password.
+app.put('/api/admin/admins/:id/password', auth, requireOwner, (req, res) => {
+  const admin = db.admins.find((a) => a.id === Number(req.params.id));
+  if (!admin) return res.status(404).json({ error: 'Not found' });
+  const { password } = req.body || {};
+  if (!isNonEmpty(password) || password.length < 6) {
+    return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+  }
+  admin.passwordHash = bcrypt.hashSync(password, 10);
+  store.persist();
+  res.json({ ok: true });
+});
+
 app.delete('/api/admin/admins/:id', auth, requireOwner, (req, res) => {
   const id = Number(req.params.id);
   if (id === req.admin.id) return res.status(400).json({ error: 'You cannot delete yourself.' });
@@ -615,7 +735,7 @@ app.delete('/api/admin/admins/:id', auth, requireOwner, (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Routing for SPA-ish pages
+// Routing
 // ---------------------------------------------------------------------------
 app.get('/admin', (req, res) =>
   res.sendFile(path.join(__dirname, 'public', 'admin.html'))
@@ -626,7 +746,11 @@ app.use((req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+// Daily database backup (on startup + every 24h). Keeps the last 30 days.
+store.backup();
+setInterval(() => store.backup(), 24 * 60 * 60 * 1000);
+
 app.listen(PORT, () => {
-  console.log(`ProImplant running on http://localhost:${PORT}`);
+  console.log(`ProImplant running on http://localhost:${PORT} (timezone: ${CLINIC_TZ})`);
   console.log(`Admin panel: http://localhost:${PORT}/admin`);
 });
