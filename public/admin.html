@@ -51,10 +51,11 @@
       <nav>
         <a data-view="dashboard" class="active">📊 Dashboard</a>
         <a data-view="appointments">📅 Appointments</a>
-        <a data-view="doctors">👨‍⚕️ Doctors</a>
-        <a data-view="services">🦷 Services</a>
-        <a data-view="settings">⚙️ Clinic settings</a>
-        <a data-view="admins">🔑 Admins</a>
+        <a data-view="reports" class="staff-only">📈 Reports</a>
+        <a data-view="doctors" class="staff-only">👨‍⚕️ Doctors</a>
+        <a data-view="services" class="staff-only">🦷 Services</a>
+        <a data-view="settings" class="staff-only">⚙️ Clinic settings</a>
+        <a data-view="admins" class="staff-only">🔑 Admins</a>
         <a href="/" target="_blank">🌐 View website</a>
       </nav>
       <div class="logout"><button id="logoutBtn">Log out</button></div>
@@ -93,6 +94,37 @@
             </div>
           </div>
           <div id="apptsWrap"></div>
+        </div>
+      </section>
+
+      <!-- Reports -->
+      <section class="view" id="view-reports">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Reports</h2>
+            <div class="filters">
+              <label style="margin:0;align-self:center;">From</label>
+              <input type="date" id="repFrom" />
+              <label style="margin:0;align-self:center;">To</label>
+              <input type="date" id="repTo" />
+              <button class="btn btn-primary btn-sm" id="repApply">Apply</button>
+            </div>
+          </div>
+          <div class="stats" id="repStatus"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>Last 14 days</h2></div>
+          <div id="repChart"></div>
+        </div>
+        <div class="grid2" style="align-items:start;">
+          <div class="panel">
+            <div class="panel-head"><h2>By doctor</h2></div>
+            <div id="repByDoctor"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h2>By service</h2></div>
+            <div id="repByService"></div>
+          </div>
         </div>
       </section>
 

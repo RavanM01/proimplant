@@ -23,12 +23,26 @@ A complete, self-contained website for **ProImplant Sumqayıt Stomatoloji Klinik
 
 ### Admin panel (`/admin`)
 - Secure login (JWT, bcrypt-hashed passwords)
+- **Role-based access:**
+  - **Owner / Staff** → full access to everything
+  - **Doctor** → sees and manages *only their own* appointments
 - Dashboard with live stats (today / pending / confirmed / totals)
 - Appointments: filter by status & date, confirm / complete / cancel / delete
-- Doctors: full create / edit / delete (bilingual)
-- Services: full create / edit / delete (bilingual, price, duration, icon)
-- Clinic settings: contact info, address, Instagram, rating, **working hours editor**, slot length
-- Admin accounts: owner can add/remove staff & owner admins
+- **Reports**: totals by status, a 14-day bookings chart, breakdown by doctor and by service (with date range)
+- Doctors: full create / edit / delete (bilingual) **+ each doctor's own email and working days/hours**
+- Services: full create / edit / delete (bilingual, price, **duration**, icon)
+- Clinic settings: contact info, address, Instagram, rating, working hours, slot length
+- Accounts: owner can add/remove **owner, staff and doctor** logins
+
+### Smart booking rules
+- Time slots are generated from **the selected doctor's own working hours**
+- A booking blocks the doctor for the **full duration of the chosen service** — e.g. a 45-min service at 10:00 makes 10:30 unavailable for that doctor (but other doctors stay free)
+- Bookings outside a doctor's working hours are rejected
+
+### Notifications (optional, configured via env)
+- **Email to the doctor** when a new appointment is booked (SMTP)
+- **SMS to the patient** when their appointment is confirmed / cancelled / completed (Twilio)
+- If not configured, notifications are simply logged — the app works fine without them. See `.env.example`.
 
 ---
 

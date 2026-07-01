@@ -24,13 +24,14 @@ const I18N = {
     'booking.subtitle': 'Formu doldurun, biz ən qısa zamanda sizinlə əlaqə saxlayaq və qəbulu təsdiqləyək.',
     'booking.formTitle': 'Qəbul üçün müraciət', 'booking.formSub': 'Bütün məcburi xanaları (*) doldurun.',
     'form.name': 'Ad, Soyad *', 'form.phone': 'Telefon *', 'form.email': 'E-mail',
-    'form.service': 'Xidmət', 'form.doctor': 'Həkim', 'form.date': 'Tarix *',
+    'form.service': 'Xidmət *', 'form.doctor': 'Həkim *', 'form.date': 'Tarix *',
     'form.time': 'Saat *', 'form.message': 'Qeyd', 'form.submit': 'Qəbulu təsdiqlə',
-    'form.anyDoctor': 'Fərqi yoxdur', 'form.selectService': 'Xidmət seçin', 'form.pickTime': 'Saat seçin',
+    'form.selectDoctor': 'Həkim seçin', 'form.selectService': 'Xidmət seçin', 'form.pickTime': 'Saat seçin',
+    'form.pickPrereq': 'Əvvəlcə xidmət, həkim və tarix seçin', 'form.doctorClosed': 'Həkim bu gün qəbul etmir',
     'form.success': '✅ Müraciətiniz qəbul olundu! Tezliklə sizinlə əlaqə saxlayacağıq.',
     'form.error': 'Xəta baş verdi. Yenidən cəhd edin.',
     'form.slotTaken': 'Bu saat artıq doludur. Başqa saat seçin.',
-    'form.required': 'Zəhmət olmasa məcburi xanaları doldurun.',
+    'form.required': 'Zəhmət olmasa məcburi xanaları (xidmət, həkim, tarix, saat) doldurun.',
     'form.noSlots': 'Bu gün üçün boş saat yoxdur',
     'location.eyebrow': 'Ünvan', 'location.title': 'Bizi tapın', 'location.addr': 'Ünvan',
     'location.phone': 'Telefon', 'location.hours': 'İş saatları', 'location.directions': 'Marşrutu göstər',
@@ -64,13 +65,14 @@ const I18N = {
     'booking.subtitle': 'Fill out the form and we will contact you shortly to confirm your appointment.',
     'booking.formTitle': 'Appointment request', 'booking.formSub': 'Fill in all required (*) fields.',
     'form.name': 'Full name *', 'form.phone': 'Phone *', 'form.email': 'E-mail',
-    'form.service': 'Service', 'form.doctor': 'Doctor', 'form.date': 'Date *',
+    'form.service': 'Service *', 'form.doctor': 'Doctor *', 'form.date': 'Date *',
     'form.time': 'Time *', 'form.message': 'Note', 'form.submit': 'Confirm appointment',
-    'form.anyDoctor': 'No preference', 'form.selectService': 'Select a service', 'form.pickTime': 'Select a time',
+    'form.selectDoctor': 'Select a doctor', 'form.selectService': 'Select a service', 'form.pickTime': 'Select a time',
+    'form.pickPrereq': 'First choose service, doctor and date', 'form.doctorClosed': 'Doctor is not available this day',
     'form.success': '✅ Your request has been received! We will contact you soon.',
     'form.error': 'Something went wrong. Please try again.',
     'form.slotTaken': 'This time is already booked. Please choose another.',
-    'form.required': 'Please fill in the required fields.',
+    'form.required': 'Please fill in the required fields (service, doctor, date, time).',
     'form.noSlots': 'No free slots for this day',
     'location.eyebrow': 'Location', 'location.title': 'Find us', 'location.addr': 'Address',
     'location.phone': 'Phone', 'location.hours': 'Working hours', 'location.directions': 'Get directions',
@@ -216,41 +218,66 @@ function renderDoctors() {
 
   const sel = $('#formDoctor');
   sel.innerHTML =
-    `<option value="">${t('form.anyDoctor')}</option>` +
+    `<option value="">${t('form.selectDoctor')}</option>` +
     doctors.map((d) => `<option value="${d.id}">${d.name}</option>`).join('');
 }
 
-// --- Booking time slots -----------------------------------------------------
-function generateSlots() {
-  if (!settings) return [];
-  const date = $('#formDate').value;
-  if (!date) return [];
-  const day = new Date(date + 'T00:00').getDay();
-  const h = settings.hours.find((x) => x.day === day);
-  if (!h || h.closed) return [];
-  const step = settings.slotMinutes || 30;
-  const [oh, om] = h.open.split(':').map(Number);
-  const [ch, cm] = h.close.split(':').map(Number);
-  const slots = [];
-  for (let m = oh * 60 + om; m + step <= ch * 60 + cm; m += step) {
-    slots.push(`${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`);
-  }
-  return slots;
-}
+// --- Booking time slots (duration-aware, per selected doctor) ----------------
+const toMin = (str) => {
+  const [h, m] = String(str || '').split(':').map(Number);
+  return (h || 0) * 60 + (m || 0);
+};
+const fmt = (min) =>
+  `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
+const getDoctorById = (id) => doctors.find((d) => d.id === Number(id));
+const getServiceById = (id) => services.find((s) => s.id === Number(id));
 
 async function refreshTimeSlots() {
-  const date = $('#formDate').value;
   const timeSel = $('#formTime');
-  const slots = generateSlots();
-  let booked = [];
-  if (date) {
-    try {
-      const data = await fetchJSON('/api/availability?date=' + encodeURIComponent(date));
-      booked = data.booked || [];
-    } catch {}
+  const doctorId = $('#formDoctor').value;
+  const serviceId = $('#formService').value;
+  const date = $('#formDate').value;
+
+  // Need doctor + date (and service, for its duration) before we can offer slots.
+  if (!doctorId || !date || !serviceId) {
+    timeSel.innerHTML = `<option value="">${t('form.pickPrereq')}</option>`;
+    return;
   }
-  const available = slots.filter((s) => !booked.includes(s));
-  if (available.length === 0) {
+
+  const doctor = getDoctorById(doctorId);
+  const service = getServiceById(serviceId);
+  const duration = (service && Number(service.durationMin)) || (settings.slotMinutes || 30);
+  const step = settings.slotMinutes || 30;
+
+  // The selected doctor's working window for that weekday.
+  const day = new Date(date + 'T00:00').getDay();
+  const wh = (doctor.hours || []).find((x) => x.day === day);
+  if (!wh || wh.closed || !wh.open || !wh.close) {
+    timeSel.innerHTML = `<option value="">${t('form.doctorClosed')}</option>`;
+    return;
+  }
+  const open = toMin(wh.open);
+  const close = toMin(wh.close);
+
+  // Existing bookings for that doctor/date, as [start, end) minute ranges.
+  let booked = [];
+  try {
+    const data = await fetchJSON(
+      `/api/availability?date=${encodeURIComponent(date)}&doctorId=${encodeURIComponent(doctorId)}`
+    );
+    booked = (data.booked || []).map((b) => ({
+      s: toMin(b.time),
+      e: toMin(b.time) + (Number(b.durationMin) || step),
+    }));
+  } catch {}
+
+  const available = [];
+  for (let m = open; m + duration <= close; m += step) {
+    const overlaps = booked.some((r) => m < r.e && r.s < m + duration);
+    if (!overlaps) available.push(fmt(m));
+  }
+
+  if (!available.length) {
     timeSel.innerHTML = `<option value="">${t('form.noSlots')}</option>`;
   } else {
     timeSel.innerHTML =
@@ -267,7 +294,7 @@ async function submitBooking(e) {
   const btn = $('#submitBtn');
   const data = Object.fromEntries(new FormData(form).entries());
 
-  if (!data.name || !data.phone || !data.date || !data.time) {
+  if (!data.name || !data.phone || !data.serviceId || !data.doctorId || !data.date || !data.time) {
     showMsg('error', t('form.required'));
     return;
   }
@@ -284,7 +311,8 @@ async function submitBooking(e) {
       form.reset();
       await refreshTimeSlots();
     } else if (res.status === 409) {
-      showMsg('error', t('form.slotTaken'));
+      // Server returns a specific reason (already booked / outside hours / closed).
+      showMsg('error', out.error || t('form.slotTaken'));
       await refreshTimeSlots();
     } else {
       showMsg('error', out.error || t('form.error'));
@@ -309,6 +337,9 @@ function setupDate() {
   const today = new Date().toISOString().slice(0, 10);
   d.min = today;
   d.addEventListener('change', refreshTimeSlots);
+  // Slots depend on doctor + service + date, so recompute when any changes.
+  $('#formDoctor').addEventListener('change', refreshTimeSlots);
+  $('#formService').addEventListener('change', refreshTimeSlots);
 }
 
 function setLang(newLang) {

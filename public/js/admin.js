@@ -78,9 +78,20 @@ function logout() {
 async function showApp() {
   $('#loginWrap').style.display = 'none';
   $('#app').classList.add('show');
-  $('#whoName').textContent = me ? me.name : '';
-  await loadAll();
+  $('#whoName').textContent = me ? `${me.name}${me.role === 'doctor' ? ' (Doctor)' : ''}` : '';
+  applyRoleVisibility();
+  // Doctor accounts only see their own appointments, so skip loading the
+  // staff-only collections (they'd 403 anyway).
+  if (me && me.role !== 'doctor') await loadAll();
   switchView('dashboard');
+}
+
+// Hide staff/owner-only sections from doctor accounts.
+function applyRoleVisibility() {
+  const isDoctor = me && me.role === 'doctor';
+  document.querySelectorAll('.staff-only').forEach((el) => {
+    el.style.display = isDoctor ? 'none' : '';
+  });
 }
 
 // --- Views ------------------------------------------------------------------
@@ -91,13 +102,50 @@ function switchView(view) {
     a.classList.toggle('active', a.dataset.view === view)
   );
   $('#viewTitle').textContent = { dashboard: 'Dashboard', appointments: 'Appointments',
-    doctors: 'Doctors', services: 'Services', settings: 'Clinic settings', admins: 'Admins' }[view];
+    reports: 'Reports', doctors: 'Doctors', services: 'Services', settings: 'Clinic settings',
+    admins: 'Admins' }[view];
   if (view === 'dashboard') renderDashboard();
   if (view === 'appointments') loadAppointments();
+  if (view === 'reports') loadReports();
   if (view === 'doctors') renderDoctors();
   if (view === 'services') renderServices();
   if (view === 'settings') renderSettings();
   if (view === 'admins') loadAdmins();
+}
+
+// --- Reports ----------------------------------------------------------------
+async function loadReports() {
+  const from = $('#repFrom').value;
+  const to = $('#repTo').value;
+  const q = new URLSearchParams();
+  if (from) q.set('from', from);
+  if (to) q.set('to', to);
+  try {
+    const r = await api('/admin/reports?' + q.toString());
+    $('#repStatus').innerHTML = [
+      ['Total', r.total, 'accent'],
+      ['Pending', r.byStatus.pending, ''],
+      ['Confirmed', r.byStatus.confirmed, ''],
+      ['Completed', r.byStatus.completed, ''],
+      ['Cancelled', r.byStatus.cancelled, ''],
+    ].map(([l, n, c]) => `<div class="stat-card ${c}"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('');
+
+    const max = Math.max(1, ...r.byDay.map((d) => d.count));
+    $('#repChart').innerHTML = `<div class="bars">${r.byDay.map((d) =>
+      `<div class="bar-col"><div class="bar" style="height:${Math.round((d.count / max) * 120) + 3}px" title="${d.count} on ${d.date}"></div><span class="bar-val">${d.count}</span><span class="bar-lbl">${d.date.slice(5)}</span></div>`).join('')}</div>`;
+
+    $('#repByDoctor').innerHTML = !r.byDoctor.length
+      ? '<div class="empty">No data.</div>'
+      : `<table><thead><tr><th>Doctor</th><th>Total</th><th>Confirmed</th><th>Completed</th><th>Cancelled</th></tr></thead><tbody>${
+          r.byDoctor.map((d) => `<tr><td><b>${esc(d.name)}</b></td><td>${d.total}</td><td>${d.confirmed}</td><td>${d.completed}</td><td>${d.cancelled}</td></tr>`).join('')
+        }</tbody></table>`;
+
+    $('#repByService').innerHTML = !r.byService.length
+      ? '<div class="empty">No data.</div>'
+      : `<table><thead><tr><th>Service</th><th>Bookings</th></tr></thead><tbody>${
+          r.byService.map((s) => `<tr><td>${esc(s.name)}</td><td>${s.count}</td></tr>`).join('')
+        }</tbody></table>`;
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 async function loadAll() {
@@ -154,7 +202,7 @@ function apptTable(appts) {
         <td><b>${esc(a.date)}</b><br><span style="color:var(--muted)">${esc(a.time)}</span></td>
         <td>${esc(a.name)}${a.message ? `<br><small style="color:var(--muted)">📝 ${esc(a.message)}</small>` : ''}</td>
         <td><a href="tel:${esc(a.phone)}">${esc(a.phone)}</a>${a.email ? `<br><small>${esc(a.email)}</small>` : ''}</td>
-        <td>${esc(sName)}</td>
+        <td>${esc(sName)}${a.durationMin ? ` <small style="color:var(--muted)">${a.durationMin}m</small>` : ''}</td>
         <td>${esc(a.doctorName || '—')}</td>
         <td><span class="badge ${a.status}">${a.status}</span></td>
         <td><div class="row-actions">
@@ -226,11 +274,56 @@ function renderDoctors() {
   );
 }
 
+// Shared working-hours editor helpers (used by doctor modal, Mon-first order).
+function hoursForEdit(hours) {
+  return [1, 2, 3, 4, 5, 6, 0].map((day) => {
+    const h = (hours || []).find((x) => Number(x.day) === day) || {};
+    return {
+      day,
+      open: h.open || (day === 0 ? '' : '10:00'),
+      close: h.close || (day === 0 ? '' : '19:00'),
+      closed: h.closed !== undefined ? !!h.closed : day === 0,
+    };
+  });
+}
+function hoursRowsHTML(hours) {
+  return hoursForEdit(hours).map((h) => `
+    <div class="hrow" data-day="${h.day}">
+      <span class="day">${DAYS[h.day]}</span>
+      <input type="time" value="${h.open}" ${h.closed ? 'disabled' : ''} />
+      <input type="time" value="${h.close}" ${h.closed ? 'disabled' : ''} />
+      <label style="display:flex;align-items:center;gap:5px;font-weight:500;margin:0;">
+        <input type="checkbox" ${h.closed ? 'checked' : ''} style="width:auto"> Closed
+      </label>
+    </div>`).join('');
+}
+function bindHoursToggles(container) {
+  document.querySelectorAll(container + ' .hrow').forEach((row) => {
+    const cb = row.querySelector('input[type=checkbox]');
+    const times = row.querySelectorAll('input[type=time]');
+    cb.addEventListener('change', () => times.forEach((t) => (t.disabled = cb.checked)));
+  });
+}
+function readHours(container) {
+  return [...document.querySelectorAll(container + ' .hrow')].map((row) => {
+    const times = row.querySelectorAll('input[type=time]');
+    return {
+      day: Number(row.dataset.day),
+      open: times[0].value,
+      close: times[1].value,
+      closed: row.querySelector('input[type=checkbox]').checked,
+    };
+  });
+}
+
 function doctorModal(doc) {
-  const d = doc || { name: '', specialty: {}, bio: {}, photo: '', active: true };
+  const d = doc || { name: '', email: '', specialty: {}, bio: {}, photo: '', active: true, hours: [] };
   openModal(`
     <h3>${doc ? 'Edit' : 'Add'} doctor</h3>
-    <div class="field"><label>Full name</label><input id="dName" value="${esc(d.name)}" /></div>
+    <div class="grid2">
+      <div class="field"><label>Full name</label><input id="dName" value="${esc(d.name)}" /></div>
+      <div class="field"><label>Email (booking notifications)</label><input id="dEmail" type="email" value="${esc(d.email)}" /></div>
+    </div>
     <div class="grid2">
       <div class="field"><label>Specialty (AZ)</label><input id="dSpecAz" value="${esc(d.specialty?.az)}" /></div>
       <div class="field"><label>Specialty (EN)</label><input id="dSpecEn" value="${esc(d.specialty?.en)}" /></div>
@@ -238,18 +331,23 @@ function doctorModal(doc) {
     <div class="field"><label>Bio (AZ)</label><textarea id="dBioAz">${esc(d.bio?.az)}</textarea></div>
     <div class="field"><label>Bio (EN)</label><textarea id="dBioEn">${esc(d.bio?.en)}</textarea></div>
     <div class="field"><label>Photo URL (optional)</label><input id="dPhoto" value="${esc(d.photo)}" /></div>
-    <div class="field"><label><input type="checkbox" id="dActive" ${d.active === false ? '' : 'checked'} style="width:auto;margin-right:6px">Show on website</label></div>
+    <label style="margin-bottom:8px;display:block">Working days &amp; hours</label>
+    <div class="hours-editor" id="dHours">${hoursRowsHTML(d.hours)}</div>
+    <div class="field" style="margin-top:14px"><label><input type="checkbox" id="dActive" ${d.active === false ? '' : 'checked'} style="width:auto;margin-right:6px">Show on website</label></div>
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
       <button class="btn btn-primary" id="saveDoc">Save</button>
     </div>`);
+  bindHoursToggles('#dHours');
   $('#saveDoc').addEventListener('click', async () => {
     const body = {
       name: $('#dName').value,
+      email: $('#dEmail').value,
       specialty: { az: $('#dSpecAz').value, en: $('#dSpecEn').value },
       bio: { az: $('#dBioAz').value, en: $('#dBioEn').value },
       photo: $('#dPhoto').value,
       active: $('#dActive').checked,
+      hours: readHours('#dHours'),
     };
     try {
       if (doc) await api('/admin/doctors/' + doc.id, { method: 'PUT', body: JSON.stringify(body) });
@@ -400,10 +498,15 @@ async function saveSettings(e) {
 async function loadAdmins() {
   try {
     const admins = await api('/admin/admins');
+    const docName = (id) => {
+      const d = cache.doctors.find((x) => x.id === id);
+      return d ? d.name : '#' + id;
+    };
+    const roleBadge = { owner: 'confirmed', staff: 'on', doctor: 'pending' };
     $('#adminsWrap').innerHTML = `<table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th></th></tr></thead><tbody>${
       admins.map((a) => `<tr>
         <td><b>${esc(a.name)}</b></td><td>${esc(a.email)}</td>
-        <td><span class="badge ${a.role === 'owner' ? 'confirmed' : 'off'}">${a.role}</span></td>
+        <td><span class="badge ${roleBadge[a.role] || 'off'}">${a.role}</span>${a.role === 'doctor' && a.doctorId ? ` <small style="color:var(--muted)">${esc(docName(a.doctorId))}</small>` : ''}</td>
         <td>${me && me.role === 'owner' && a.id !== me.id ? `<button class="btn btn-sm btn-danger" data-del-admin="${a.id}">Delete</button>` : ''}</td>
       </tr>`).join('')
     }</tbody></table>`;
@@ -421,28 +524,43 @@ async function loadAdmins() {
 }
 
 function adminModal() {
+  const docOptions = cache.doctors
+    .map((d) => `<option value="${d.id}">${esc(d.name)}</option>`).join('');
   openModal(`
-    <h3>Add admin</h3>
+    <h3>Add account</h3>
     <div class="field"><label>Name</label><input id="aName" /></div>
     <div class="field"><label>Email</label><input id="aEmail" type="email" /></div>
     <div class="field"><label>Password</label><input id="aPassword" type="text" /></div>
-    <div class="field"><label>Role</label><select id="aRole"><option value="staff">Staff</option><option value="owner">Owner</option></select></div>
+    <div class="field"><label>Role</label>
+      <select id="aRole">
+        <option value="staff">Staff — full access</option>
+        <option value="owner">Owner — full access + manage admins</option>
+        <option value="doctor">Doctor — own appointments only</option>
+      </select>
+    </div>
+    <div class="field" id="aDoctorWrap" style="display:none">
+      <label>Linked doctor</label>
+      <select id="aDoctor">${docOptions || '<option value="">No doctors yet</option>'}</select>
+    </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
       <button class="btn btn-primary" id="saveAdmin">Create</button>
     </div>`);
+  $('#aRole').addEventListener('change', () => {
+    $('#aDoctorWrap').style.display = $('#aRole').value === 'doctor' ? 'block' : 'none';
+  });
   $('#saveAdmin').addEventListener('click', async () => {
+    const role = $('#aRole').value;
+    const body = {
+      name: $('#aName').value, email: $('#aEmail').value,
+      password: $('#aPassword').value, role,
+    };
+    if (role === 'doctor') body.doctorId = $('#aDoctor').value;
     try {
-      await api('/admin/admins', {
-        method: 'POST',
-        body: JSON.stringify({
-          name: $('#aName').value, email: $('#aEmail').value,
-          password: $('#aPassword').value, role: $('#aRole').value,
-        }),
-      });
+      await api('/admin/admins', { method: 'POST', body: JSON.stringify(body) });
       closeModal();
       loadAdmins();
-      toast('Admin created', 'success');
+      toast('Account created', 'success');
     } catch (e) { toast(e.message, 'error'); }
   });
 }
@@ -474,6 +592,7 @@ function init() {
   $('#addDoctorBtn').addEventListener('click', () => doctorModal(null));
   $('#addServiceBtn').addEventListener('click', () => serviceModal(null));
   $('#addAdminBtn').addEventListener('click', adminModal);
+  $('#repApply').addEventListener('click', loadReports);
   $('#settingsForm').addEventListener('submit', saveSettings);
   $('#modalBg').addEventListener('click', (e) => { if (e.target.id === 'modalBg') closeModal(); });
 

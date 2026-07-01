@@ -3,12 +3,14 @@
  * Serves the public website, the booking API and the protected admin API.
  */
 const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
 
 const store = require('./db/store');
+const notify = require('./db/notify');
 
 // Ensure the database is seeded on first boot (idempotent).
 require('./db/seed');
@@ -26,28 +28,44 @@ const db = store.data;
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+function isNonEmpty(v) {
+  return typeof v === 'string' && v.trim().length > 0;
+}
+function toMin(t) {
+  const [h, m] = String(t || '').split(':').map(Number);
+  return (h || 0) * 60 + (m || 0);
+}
+function apptDuration(a) {
+  return Number(a.durationMin) || Number(db.settings.slotMinutes) || 30;
+}
+function rangesOverlap(s1, e1, s2, e2) {
+  return s1 < e2 && s2 < e1;
+}
+function dayOfDate(date) {
+  return new Date(date + 'T00:00:00').getDay();
+}
+
 function publicSettings() {
   const s = db.settings;
   return {
-    clinicName: s.clinicName,
-    tagline: s.tagline,
-    phone: s.phone,
-    phone2: s.phone2,
-    email: s.email,
-    address: s.address,
-    instagram: s.instagram,
-    website: s.website,
-    mapsQuery: s.mapsQuery,
-    rating: s.rating,
-    reviewCount: s.reviewCount,
-    hours: s.hours,
-    slotMinutes: s.slotMinutes,
+    clinicName: s.clinicName, tagline: s.tagline, phone: s.phone, phone2: s.phone2,
+    email: s.email, address: s.address, instagram: s.instagram, website: s.website,
+    mapsQuery: s.mapsQuery, rating: s.rating, reviewCount: s.reviewCount,
+    hours: s.hours, slotMinutes: s.slotMinutes,
+  };
+}
+
+// Public doctor view — never expose the doctor's email publicly.
+function publicDoctor(d) {
+  return {
+    id: d.id, name: d.name, specialty: d.specialty, bio: d.bio,
+    photo: d.photo, active: d.active, hours: d.hours || [],
   };
 }
 
 function sign(admin) {
   return jwt.sign(
-    { id: admin.id, email: admin.email, role: admin.role, name: admin.name },
+    { id: admin.id, email: admin.email, role: admin.role, name: admin.name, doctorId: admin.doctorId || null },
     JWT_SECRET,
     { expiresIn: '7d' }
   );
@@ -65,8 +83,15 @@ function auth(req, res, next) {
   }
 }
 
-function isNonEmpty(v) {
-  return typeof v === 'string' && v.trim().length > 0;
+// Staff = owner or staff (i.e. NOT a doctor account). Doctors are limited to
+// their own appointments only.
+function requireStaff(req, res, next) {
+  if (req.admin.role === 'doctor') return res.status(403).json({ error: 'Not allowed for doctor accounts.' });
+  next();
+}
+function requireOwner(req, res, next) {
+  if (req.admin.role !== 'owner') return res.status(403).json({ error: 'Owner only.' });
+  next();
 }
 
 const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 30 });
@@ -82,23 +107,23 @@ app.get('/api/services', (req, res) => {
 });
 
 app.get('/api/doctors', (req, res) => {
-  res.json(db.doctors.filter((d) => d.active !== false));
+  res.json(db.doctors.filter((d) => d.active !== false).map(publicDoctor));
 });
 
-// Booked time slots for a given date (so the form can disable taken times).
+// Booked ranges for a doctor on a date, so the form can block overlapping slots.
 app.get('/api/availability', (req, res) => {
-  const { date } = req.query;
-  if (!isNonEmpty(date)) return res.json({ booked: [] });
+  const { date, doctorId } = req.query;
+  if (!isNonEmpty(date) || !isNonEmpty(doctorId)) return res.json({ booked: [] });
+  const did = Number(doctorId);
   const booked = db.appointments
-    .filter((a) => a.date === date && a.status !== 'cancelled')
-    .map((a) => a.time);
+    .filter((a) => a.doctorId === did && a.date === date && a.status !== 'cancelled')
+    .map((a) => ({ time: a.time, durationMin: apptDuration(a) }));
   res.json({ booked });
 });
 
 // Create a reservation (public).
 app.post('/api/appointments', bookingLimiter, (req, res) => {
-  const { name, phone, email, serviceId, doctorId, date, time, message } =
-    req.body || {};
+  const { name, phone, email, serviceId, doctorId, date, time, message } = req.body || {};
 
   if (!isNonEmpty(name) || !isNonEmpty(phone) || !isNonEmpty(date) || !isNonEmpty(time)) {
     return res.status(400).json({ error: 'Name, phone, date and time are required.' });
@@ -107,16 +132,34 @@ app.post('/api/appointments', bookingLimiter, (req, res) => {
     return res.status(400).json({ error: 'Input too long.' });
   }
 
-  // Reject double-booking of the same slot.
-  const clash = db.appointments.some(
-    (a) => a.date === date && a.time === time && a.status !== 'cancelled'
-  );
-  if (clash) {
-    return res.status(409).json({ error: 'This time slot is already booked.' });
-  }
+  const doctor = db.doctors.find((d) => d.id === Number(doctorId));
+  if (!doctor) return res.status(400).json({ error: 'Please select a doctor.' });
 
   const service = db.services.find((s) => s.id === Number(serviceId));
-  const doctor = db.doctors.find((d) => d.id === Number(doctorId));
+  const duration = service ? Number(service.durationMin) || 30 : Number(db.settings.slotMinutes) || 30;
+  const start = toMin(time);
+  const end = start + duration;
+
+  // Must be within the selected doctor's working hours for that weekday.
+  const wh = (doctor.hours || []).find((h) => h.day === dayOfDate(date));
+  if (!wh || wh.closed) {
+    return res.status(409).json({ error: 'The doctor is not available on this day.' });
+  }
+  if (start < toMin(wh.open) || end > toMin(wh.close)) {
+    return res.status(409).json({ error: 'Selected time is outside the doctor\'s working hours.' });
+  }
+
+  // Reject any overlap with the same doctor's existing appointments (duration-aware).
+  const clash = db.appointments.some(
+    (a) =>
+      a.doctorId === doctor.id &&
+      a.date === date &&
+      a.status !== 'cancelled' &&
+      rangesOverlap(start, end, toMin(a.time), toMin(a.time) + apptDuration(a))
+  );
+  if (clash) {
+    return res.status(409).json({ error: 'This time slot is already booked for this doctor.' });
+  }
 
   const appointment = {
     id: store.nextId(),
@@ -125,8 +168,9 @@ app.post('/api/appointments', bookingLimiter, (req, res) => {
     email: isNonEmpty(email) ? email.trim() : '',
     serviceId: service ? service.id : null,
     serviceName: service ? service.name : null,
-    doctorId: doctor ? doctor.id : null,
-    doctorName: doctor ? doctor.name : null,
+    durationMin: duration,
+    doctorId: doctor.id,
+    doctorName: doctor.name,
     date,
     time,
     message: isNonEmpty(message) ? message.trim().slice(0, 1000) : '',
@@ -135,6 +179,22 @@ app.post('/api/appointments', bookingLimiter, (req, res) => {
   };
   db.appointments.push(appointment);
   store.persist();
+
+  // Notify the doctor by email (fire-and-forget; never blocks the booking).
+  const svcName = service ? (service.name.az || service.name.en) : '—';
+  notify.sendMail({
+    to: doctor.email,
+    subject: `Yeni rezervasiya — ${date} ${time}`,
+    text:
+      `Yeni onlayn rezervasiya:\n\n` +
+      `Pasiyent: ${appointment.name}\n` +
+      `Telefon: ${appointment.phone}\n` +
+      `Xidmət: ${svcName} (${duration} dəq)\n` +
+      `Tarix: ${date} ${time}\n` +
+      (appointment.message ? `Qeyd: ${appointment.message}\n` : '') +
+      `\nAdmin panel: ${db.settings.website || ''}/admin`,
+  }).catch(() => {});
+
   res.status(201).json({ ok: true, id: appointment.id });
 });
 
@@ -150,7 +210,10 @@ app.post('/api/auth/login', authLimiter, (req, res) => {
   if (!admin || !bcrypt.compareSync(password, admin.passwordHash)) {
     return res.status(401).json({ error: 'Invalid credentials.' });
   }
-  res.json({ token: sign(admin), admin: { name: admin.name, email: admin.email, role: admin.role } });
+  res.json({
+    token: sign(admin),
+    admin: { name: admin.name, email: admin.email, role: admin.role, doctorId: admin.doctorId || null },
+  });
 });
 
 app.get('/api/auth/me', auth, (req, res) => res.json({ admin: req.admin }));
@@ -159,7 +222,10 @@ app.get('/api/auth/me', auth, (req, res) => res.json({ admin: req.admin }));
 // Admin API (protected)
 // ---------------------------------------------------------------------------
 app.get('/api/admin/stats', auth, (req, res) => {
-  const appts = db.appointments;
+  const isDoctor = req.admin.role === 'doctor';
+  const appts = isDoctor
+    ? db.appointments.filter((a) => a.doctorId === req.admin.doctorId)
+    : db.appointments;
   const today = new Date().toISOString().slice(0, 10);
   res.json({
     total: appts.length,
@@ -171,10 +237,53 @@ app.get('/api/admin/stats', auth, (req, res) => {
   });
 });
 
+// --- Reports (staff/owner) ---
+app.get('/api/admin/reports', auth, requireStaff, (req, res) => {
+  const { from, to } = req.query;
+  let list = [...db.appointments];
+  if (isNonEmpty(from)) list = list.filter((a) => a.date >= from);
+  if (isNonEmpty(to)) list = list.filter((a) => a.date <= to);
+
+  const byStatus = { pending: 0, confirmed: 0, completed: 0, cancelled: 0 };
+  list.forEach((a) => { byStatus[a.status] = (byStatus[a.status] || 0) + 1; });
+
+  const byDoctor = db.doctors
+    .map((d) => {
+      const items = list.filter((a) => a.doctorId === d.id);
+      return {
+        id: d.id, name: d.name, total: items.length,
+        confirmed: items.filter((a) => a.status === 'confirmed').length,
+        completed: items.filter((a) => a.status === 'completed').length,
+        cancelled: items.filter((a) => a.status === 'cancelled').length,
+      };
+    })
+    .sort((a, b) => b.total - a.total);
+
+  const svcMap = {};
+  list.forEach((a) => {
+    const n = a.serviceName ? (a.serviceName.az || a.serviceName.en) : '—';
+    svcMap[n] = (svcMap[n] || 0) + 1;
+  });
+  const byService = Object.entries(svcMap)
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count);
+
+  const byDay = [];
+  for (let i = 13; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const key = d.toISOString().slice(0, 10);
+    byDay.push({ date: key, count: db.appointments.filter((a) => a.date === key && a.status !== 'cancelled').length });
+  }
+
+  res.json({ total: list.length, byStatus, byDoctor, byService, byDay });
+});
+
 // --- Appointments ---
 app.get('/api/admin/appointments', auth, (req, res) => {
   const { status, date } = req.query;
   let list = [...db.appointments];
+  if (req.admin.role === 'doctor') list = list.filter((a) => a.doctorId === req.admin.doctorId);
   if (isNonEmpty(status)) list = list.filter((a) => a.status === status);
   if (isNonEmpty(date)) list = list.filter((a) => a.date === date);
   list.sort((a, b) => (a.date + a.time < b.date + b.time ? 1 : -1));
@@ -184,15 +293,30 @@ app.get('/api/admin/appointments', auth, (req, res) => {
 app.patch('/api/admin/appointments/:id', auth, (req, res) => {
   const appt = db.appointments.find((a) => a.id === Number(req.params.id));
   if (!appt) return res.status(404).json({ error: 'Not found' });
+  if (req.admin.role === 'doctor' && appt.doctorId !== req.admin.doctorId) {
+    return res.status(403).json({ error: 'You can only manage your own appointments.' });
+  }
   const { status, note } = req.body || {};
   const allowed = ['pending', 'confirmed', 'completed', 'cancelled'];
+  const prevStatus = appt.status;
   if (status && allowed.includes(status)) appt.status = status;
   if (typeof note === 'string') appt.adminNote = note.slice(0, 1000);
   store.persist();
+
+  // SMS the patient when the status meaningfully changes.
+  if (status && status !== prevStatus && ['confirmed', 'cancelled', 'completed'].includes(status)) {
+    const msgs = {
+      confirmed: `Hörmətli ${appt.name}, ${appt.date} ${appt.time} tarixli qəbulunuz TƏSDİQLƏNDİ. ProImplant`,
+      cancelled: `Hörmətli ${appt.name}, ${appt.date} ${appt.time} tarixli qəbulunuz LƏĞV edildi. Ətraflı: ${db.settings.phone || ''}. ProImplant`,
+      completed: `Hörmətli ${appt.name}, bizi seçdiyiniz üçün təşəkkür edirik! Sağlam təbəssümlər. ProImplant`,
+    };
+    notify.sendSms({ to: appt.phone, body: msgs[status] }).catch(() => {});
+  }
+
   res.json(appt);
 });
 
-app.delete('/api/admin/appointments/:id', auth, (req, res) => {
+app.delete('/api/admin/appointments/:id', auth, requireStaff, (req, res) => {
   const i = db.appointments.findIndex((a) => a.id === Number(req.params.id));
   if (i === -1) return res.status(404).json({ error: 'Not found' });
   db.appointments.splice(i, 1);
@@ -200,39 +324,54 @@ app.delete('/api/admin/appointments/:id', auth, (req, res) => {
   res.json({ ok: true });
 });
 
-// --- Doctors CRUD ---
-app.get('/api/admin/doctors', auth, (req, res) => res.json(db.doctors));
+// --- Doctors CRUD (staff/owner) ---
+app.get('/api/admin/doctors', auth, requireStaff, (req, res) => res.json(db.doctors));
 
-app.post('/api/admin/doctors', auth, (req, res) => {
-  const { name, specialty, bio, photo, active } = req.body || {};
+function normalizeHours(hours) {
+  if (!Array.isArray(hours)) return undefined;
+  return [0, 1, 2, 3, 4, 5, 6].map((day) => {
+    const h = hours.find((x) => Number(x.day) === day) || {};
+    return { day, open: h.open || '', close: h.close || '', closed: !!h.closed };
+  });
+}
+
+app.post('/api/admin/doctors', auth, requireStaff, (req, res) => {
+  const { name, email, specialty, bio, photo, active, hours } = req.body || {};
   if (!isNonEmpty(name)) return res.status(400).json({ error: 'Name required.' });
   const doctor = {
     id: store.nextId(),
     name: name.trim(),
+    email: isNonEmpty(email) ? email.trim() : '',
     specialty: specialty || { az: '', en: '' },
     bio: bio || { az: '', en: '' },
     photo: isNonEmpty(photo) ? photo.trim() : '',
     active: active !== false,
+    hours: normalizeHours(hours) || [0, 1, 2, 3, 4, 5, 6].map((day) => ({
+      day, open: day === 0 ? '' : '10:00', close: day === 0 ? '' : '19:00', closed: day === 0,
+    })),
   };
   db.doctors.push(doctor);
   store.persist();
   res.status(201).json(doctor);
 });
 
-app.put('/api/admin/doctors/:id', auth, (req, res) => {
+app.put('/api/admin/doctors/:id', auth, requireStaff, (req, res) => {
   const doctor = db.doctors.find((d) => d.id === Number(req.params.id));
   if (!doctor) return res.status(404).json({ error: 'Not found' });
-  const { name, specialty, bio, photo, active } = req.body || {};
+  const { name, email, specialty, bio, photo, active, hours } = req.body || {};
   if (isNonEmpty(name)) doctor.name = name.trim();
+  if (email !== undefined) doctor.email = email.trim();
   if (specialty) doctor.specialty = specialty;
   if (bio) doctor.bio = bio;
   if (photo !== undefined) doctor.photo = photo;
   if (active !== undefined) doctor.active = !!active;
+  const nh = normalizeHours(hours);
+  if (nh) doctor.hours = nh;
   store.persist();
   res.json(doctor);
 });
 
-app.delete('/api/admin/doctors/:id', auth, (req, res) => {
+app.delete('/api/admin/doctors/:id', auth, requireStaff, (req, res) => {
   const i = db.doctors.findIndex((d) => d.id === Number(req.params.id));
   if (i === -1) return res.status(404).json({ error: 'Not found' });
   db.doctors.splice(i, 1);
@@ -240,12 +379,12 @@ app.delete('/api/admin/doctors/:id', auth, (req, res) => {
   res.json({ ok: true });
 });
 
-// --- Services CRUD ---
-app.get('/api/admin/services', auth, (req, res) => res.json(db.services));
+// --- Services CRUD (staff/owner) ---
+app.get('/api/admin/services', auth, requireStaff, (req, res) => res.json(db.services));
 
-app.post('/api/admin/services', auth, (req, res) => {
+app.post('/api/admin/services', auth, requireStaff, (req, res) => {
   const { name, description, icon, durationMin, price, active } = req.body || {};
-  if (!name || !isNonEmpty(name.az) && !isNonEmpty(name.en)) {
+  if (!name || (!isNonEmpty(name.az) && !isNonEmpty(name.en))) {
     return res.status(400).json({ error: 'Service name required.' });
   }
   const service = {
@@ -262,7 +401,7 @@ app.post('/api/admin/services', auth, (req, res) => {
   res.status(201).json(service);
 });
 
-app.put('/api/admin/services/:id', auth, (req, res) => {
+app.put('/api/admin/services/:id', auth, requireStaff, (req, res) => {
   const service = db.services.find((s) => s.id === Number(req.params.id));
   if (!service) return res.status(404).json({ error: 'Not found' });
   const { name, description, icon, durationMin, price, active } = req.body || {};
@@ -276,7 +415,7 @@ app.put('/api/admin/services/:id', auth, (req, res) => {
   res.json(service);
 });
 
-app.delete('/api/admin/services/:id', auth, (req, res) => {
+app.delete('/api/admin/services/:id', auth, requireStaff, (req, res) => {
   const i = db.services.findIndex((s) => s.id === Number(req.params.id));
   if (i === -1) return res.status(404).json({ error: 'Not found' });
   db.services.splice(i, 1);
@@ -284,10 +423,10 @@ app.delete('/api/admin/services/:id', auth, (req, res) => {
   res.json({ ok: true });
 });
 
-// --- Settings ---
-app.get('/api/admin/settings', auth, (req, res) => res.json(db.settings));
+// --- Settings (staff/owner) ---
+app.get('/api/admin/settings', auth, requireStaff, (req, res) => res.json(db.settings));
 
-app.put('/api/admin/settings', auth, (req, res) => {
+app.put('/api/admin/settings', auth, requireStaff, (req, res) => {
   const allowed = [
     'clinicName', 'tagline', 'phone', 'phone2', 'email', 'address',
     'instagram', 'website', 'mapsQuery', 'rating', 'reviewCount',
@@ -301,27 +440,32 @@ app.put('/api/admin/settings', auth, (req, res) => {
 });
 
 // --- Admin accounts (owner only) ---
-app.get('/api/admin/admins', auth, (req, res) => {
+app.get('/api/admin/admins', auth, requireStaff, (req, res) => {
   res.json(db.admins.map(({ passwordHash, ...rest }) => rest));
 });
 
-app.post('/api/admin/admins', auth, (req, res) => {
-  if (req.admin.role !== 'owner') {
-    return res.status(403).json({ error: 'Only the owner can add admins.' });
-  }
-  const { name, email, password, role } = req.body || {};
+app.post('/api/admin/admins', auth, requireOwner, (req, res) => {
+  const { name, email, password, role, doctorId } = req.body || {};
   if (!isNonEmpty(name) || !isNonEmpty(email) || !isNonEmpty(password)) {
     return res.status(400).json({ error: 'Name, email and password required.' });
   }
   if (db.admins.some((a) => a.email === email.toLowerCase().trim())) {
     return res.status(409).json({ error: 'Email already exists.' });
   }
+  const finalRole = ['owner', 'staff', 'doctor'].includes(role) ? role : 'staff';
+  let linkedDoctorId = null;
+  if (finalRole === 'doctor') {
+    const doc = db.doctors.find((d) => d.id === Number(doctorId));
+    if (!doc) return res.status(400).json({ error: 'Select which doctor this account belongs to.' });
+    linkedDoctorId = doc.id;
+  }
   const admin = {
     id: store.nextId(),
     name: name.trim(),
     email: email.toLowerCase().trim(),
     passwordHash: bcrypt.hashSync(password, 10),
-    role: role === 'owner' ? 'owner' : 'staff',
+    role: finalRole,
+    doctorId: linkedDoctorId,
     createdAt: new Date().toISOString(),
   };
   db.admins.push(admin);
@@ -330,10 +474,7 @@ app.post('/api/admin/admins', auth, (req, res) => {
   res.status(201).json(safe);
 });
 
-app.delete('/api/admin/admins/:id', auth, (req, res) => {
-  if (req.admin.role !== 'owner') {
-    return res.status(403).json({ error: 'Only the owner can remove admins.' });
-  }
+app.delete('/api/admin/admins/:id', auth, requireOwner, (req, res) => {
   const id = Number(req.params.id);
   if (id === req.admin.id) return res.status(400).json({ error: 'You cannot delete yourself.' });
   const i = db.admins.findIndex((a) => a.id === id);

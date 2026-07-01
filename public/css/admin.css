@@ -118,6 +118,13 @@ label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 5px; c
 .hours-editor .hrow { display: grid; grid-template-columns: 130px 1fr 1fr 90px; gap: 10px; align-items: center; margin-bottom: 8px; }
 .hours-editor .hrow .day { font-weight: 600; color: var(--accent); }
 
+/* Report chart */
+.bars { display: flex; align-items: flex-end; gap: 8px; height: 170px; padding: 10px 4px 0; overflow-x: auto; }
+.bar-col { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; flex: 1; min-width: 34px; }
+.bar { width: 62%; min-width: 14px; background: linear-gradient(180deg, var(--primary), var(--primary-dark)); border-radius: 6px 6px 0 0; transition: height .3s; }
+.bar-val { font-size: 12px; font-weight: 700; color: var(--accent); margin-top: 6px; }
+.bar-lbl { font-size: 11px; color: var(--muted); margin-top: 2px; white-space: nowrap; }
+
 @media (max-width: 760px) {
   .app.show { grid-template-columns: 1fr; }
   .sidebar { position: static; height: auto; }

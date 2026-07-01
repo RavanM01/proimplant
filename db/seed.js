@@ -4,6 +4,7 @@
  *
  * Run with:  npm run seed
  */
+require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 const bcrypt = require('bcryptjs');
 const store = require('./store');
 
@@ -13,7 +14,8 @@ const db = store.data;
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'admin@proimplant.az').toLowerCase();
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'proimplant123';
 
-if (!db.admins.some((a) => a.email === ADMIN_EMAIL)) {
+const existingAdmin = db.admins.find((a) => a.email === ADMIN_EMAIL);
+if (!existingAdmin) {
   db.admins.push({
     id: store.nextId(),
     name: 'Administrator',
@@ -22,7 +24,16 @@ if (!db.admins.some((a) => a.email === ADMIN_EMAIL)) {
     role: 'owner',
     createdAt: new Date().toISOString(),
   });
-  console.log(`Created admin: ${ADMIN_EMAIL} / ${ADMIN_PASSWORD}`);
+  console.log(`Created admin: ${ADMIN_EMAIL}`);
+} else if (
+  process.env.ADMIN_PASSWORD &&
+  !bcrypt.compareSync(process.env.ADMIN_PASSWORD, existingAdmin.passwordHash)
+) {
+  // ADMIN_PASSWORD env is the source of truth: keep the bootstrap admin's
+  // password in sync with it on every boot. This guarantees you can always
+  // recover access on a host (e.g. Render) by setting the env var.
+  existingAdmin.passwordHash = bcrypt.hashSync(process.env.ADMIN_PASSWORD, 10);
+  console.log(`Synced password for ${ADMIN_EMAIL} from ADMIN_PASSWORD env.`);
 }
 
 // ---- Clinic settings -------------------------------------------------------
@@ -125,11 +136,22 @@ if (db.services.length === 0) {
   );
 }
 
+// Default per-doctor working hours (Mon–Sat 10:00–19:00, Sunday closed).
+function defaultDoctorHours() {
+  return [0, 1, 2, 3, 4, 5, 6].map((day) => ({
+    day,
+    open: day === 0 ? '' : '10:00',
+    close: day === 0 ? '' : '19:00',
+    closed: day === 0,
+  }));
+}
+
 // ---- Doctors ---------------------------------------------------------------
 if (db.doctors.length === 0) {
   const doctors = [
     {
       name: 'Dr. Elvin Məmmədov',
+      email: 'elvin@proimplant.az',
       specialty: { az: 'İmplantoloq, Cərrah', en: 'Implantologist, Surgeon' },
       bio: {
         az: 'İmplantologiya və ağız cərrahiyyəsi üzrə 12 illik təcrübə.',
@@ -139,6 +161,7 @@ if (db.doctors.length === 0) {
     },
     {
       name: 'Dr. Aytən Hüseynova',
+      email: 'ayten@proimplant.az',
       specialty: { az: 'Estetik Stomatoloq', en: 'Aesthetic Dentist' },
       bio: {
         az: 'Vinir və təbəssüm dizaynı üzrə ixtisaslaşmışdır.',
@@ -148,6 +171,7 @@ if (db.doctors.length === 0) {
     },
     {
       name: 'Dr. Rəşad Quliyev',
+      email: 'reshad@proimplant.az',
       specialty: { az: 'Terapevt, Ortoped', en: 'Therapist, Orthopedist' },
       bio: {
         az: 'Terapevtik və ortopedik müalicə üzrə mütəxəssis.',
@@ -157,9 +181,18 @@ if (db.doctors.length === 0) {
     },
   ];
   doctors.forEach((d) =>
-    db.doctors.push({ id: store.nextId(), active: true, ...d })
+    db.doctors.push({ id: store.nextId(), active: true, hours: defaultDoctorHours(), ...d })
   );
 }
+
+// ---- Migrations (backfill fields on data seeded before these features) -----
+db.doctors.forEach((d) => {
+  if (!Array.isArray(d.hours) || d.hours.length === 0) d.hours = defaultDoctorHours();
+  if (d.email === undefined) d.email = '';
+});
+db.admins.forEach((a) => {
+  if (a.doctorId === undefined) a.doctorId = null;
+});
 
 store.persist();
 console.log('Seed complete.');
