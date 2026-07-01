@@ -5,7 +5,7 @@ A complete, self-contained website for **ProImplant Sumqayıt Stomatoloji Klinik
 - Modern, responsive, **bilingual (Azərbaycanca / English)** public website
 - Online **appointment / reservation system** with automatic time-slot generation and double-booking protection
 - Full **admin panel** to manage appointments, doctors, services, working hours, clinic info and admin accounts
-- **Zero external database** — everything is stored in a single JSON file, so it runs anywhere with just Node.js
+- **Embedded SQLite database** (via better-sqlite3, prebuilt binary — no build tools, no external DB server) — one portable file, ACID/crash-safe, runs anywhere with just Node.js
 - Ready-to-use **Docker** and **Render.com** deployment configs
 
 ---
@@ -78,7 +78,7 @@ Copy `.env.example` to `.env` and adjust:
 | `PORT` | Port to listen on (default 3000) |
 | `JWT_SECRET` | Secret for signing login tokens — **set a long random value in production** |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Default admin created on first launch |
-| `DATA_DIR` | Where the JSON database is stored (default `./data`) |
+| `DATA_DIR` | Where the SQLite database (`clinic.sqlite`) is stored (default `./data`) |
 
 All clinic content (services, doctors, hours, contact info) is editable from the admin panel — no code changes needed.
 
@@ -122,7 +122,7 @@ proimplant/
 │   ├── admin.html       # Admin panel
 │   ├── css/             # styles.css, admin.css
 │   └── js/              # main.js, admin.js
-├── data/                # JSON database (auto-created, git-ignored)
+├── data/                # SQLite database + backups (auto-created, git-ignored)
 ├── Dockerfile
 ├── render.yaml
 └── .env.example
@@ -135,7 +135,7 @@ proimplant/
 - [ ] Change the default admin password (login → **Change password**, or set `ADMIN_PASSWORD`)
 - [ ] Ensure `DATA_DIR` is on persistent storage
 - [ ] Set `CLINIC_TZ` (default `Asia/Baku`)
-- [ ] **Run only ONE instance** (the JSON database is single-process — never scale horizontally)
+- [ ] **Run only ONE instance** (the embedded SQLite database is single-process — never scale horizontally)
 - [ ] Serve over HTTPS (Render/Railway/Coolify do this automatically)
 
 ## 🛡️ Reliability & hardening (built in)
@@ -149,7 +149,7 @@ proimplant/
 - **XSS-safe**: all admin-entered content is HTML-escaped before rendering.
 - **Single dependency-audited stack**: `npm audit` reports 0 vulnerabilities.
 
-> ⚠️ **Scaling note:** this app stores data in a single JSON file for simplicity, which means it must run as a **single process**. For very high volume or multi-instance needs, migrate the store to SQLite or Postgres (the data layer is isolated in `db/store.js`).
+> ⚠️ **Scaling note:** this app uses an embedded SQLite database, which means it must run as a **single process** (SQLite is a single-file DB). This is plenty for one clinic. For very high volume or true multi-instance/horizontal scaling, migrate to Postgres — the data layer is isolated in `db/store.js`. A legacy `db.json` is auto-imported into SQLite on first boot.
 
 ---
 

@@ -1,0 +1,10 @@
+# Never copy host-built artifacts into the image. In particular node_modules
+# contains a platform-specific better-sqlite3 binary (e.g. Windows) that must
+# NOT overwrite the Linux binary installed by `npm install` inside the image.
+node_modules
+data
+.git
+.env
+*.log
+npm-debug.log*
+.DS_Store

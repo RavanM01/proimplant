@@ -1,4 +1,5 @@
-FROM node:20-alpine
+# Debian slim (glibc) so better-sqlite3 uses its prebuilt binary (no build step).
+FROM node:22-bookworm-slim
 
 WORKDIR /app
 
